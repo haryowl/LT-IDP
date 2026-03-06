@@ -1,0 +1,550 @@
+import ModbusRTU from 'modbus-serial';
+import { EventEmitter } from 'events';
+import type { DatabaseService } from './database';
+import type { ModbusDevice, ModbusRegister } from '../types';
+
+interface ModbusConnection {
+  device: ModbusDevice;
+  client: ModbusRTU;
+  registers: ModbusRegister[];
+  pollTimer?: NodeJS.Timeout;
+  recordTimer?: NodeJS.Timeout;
+  status: {
+    deviceId: string;
+    deviceName: string;
+    type: 'modbus';
+    connected: boolean;
+    lastConnected?: number;
+    lastError?: string;
+    messagesReceived?: number;
+    lastMessageTime?: number;
+  };
+  lastRecordedData: Map<string, { value: any; timestamp: number; quality: 'good' | 'bad' | 'uncertain'; registerName?: string }>;
+}
+
+export class ModbusService extends EventEmitter {
+  private connections: Map<string, ModbusConnection> = new Map();
+
+  constructor(private db: DatabaseService) {
+    super();
+  }
+
+  async connect(deviceId: string): Promise<void> {
+    const device = this.db.getModbusDeviceById(deviceId);
+    if (!device) {
+      throw new Error(`Device ${deviceId} not found`);
+    }
+    if (!device.enabled) {
+      throw new Error(`Device ${device.name} is disabled`);
+    }
+
+    if (this.connections.has(deviceId)) {
+      throw new Error(`Device ${device.name} is already connected`);
+    }
+
+    const client = new ModbusRTU();
+    let registers = this.db.getModbusRegisters(deviceId);
+    console.log(`Connecting to Modbus device: ${device.name}`);
+    console.log(`Type: ${device.type}, Host: ${device.host}, Port: ${device.port}, Slave ID: ${device.slaveId}`);
+    console.log(`Registers configured: ${registers.length}`);
+
+    try {
+      if (device.type === 'tcp') {
+        console.log(`Attempting TCP connection to ${device.host}:${device.port || 502}...`);
+        await client.connectTCP(device.host!, { port: device.port || 502 });
+        console.log(`TCP connection successful`);
+      } else if (device.type === 'rtu') {
+        console.log(`Attempting RTU connection to ${device.serialPort}...`);
+        await client.connectRTUBuffered(device.serialPort!, {
+          baudRate: device.baudRate || 9600,
+          dataBits: device.dataBits || 8,
+          stopBits: device.stopBits || 1,
+          parity: (device.parity as 'none' | 'even' | 'odd' | 'mark' | 'space') || 'none',
+        });
+        console.log(`RTU connection successful`);
+      }
+
+      client.setID(device.slaveId);
+      client.setTimeout(device.timeout);
+      console.log(`Modbus client configured - Slave ID: ${device.slaveId}, Timeout: ${device.timeout}ms`);
+
+      if (registers.length === 0) {
+        console.log(`No registers configured for ${device.name}. Attempting automatic discovery...`);
+        registers = await this.autoDiscoverRegisters(device, client, registers);
+        console.log(`Auto-discovery completed. Registers found: ${registers.length}`);
+      }
+
+      if (registers.length === 0) {
+        throw new Error(
+          `No registers could be detected automatically for device ${device.name}. ` +
+            `Please configure Modbus registers before connecting.`
+        );
+      }
+
+      const connection: ModbusConnection = {
+        device,
+        client,
+        registers,
+        status: {
+          deviceId: device.id,
+          deviceName: device.name,
+          type: 'modbus',
+          connected: true,
+          lastConnected: Date.now(),
+          messagesReceived: 0,
+        },
+        lastRecordedData: new Map(),
+      };
+
+      this.connections.set(deviceId, connection);
+      this.startPolling(deviceId);
+      this.startRecording(deviceId);
+      console.log(`Device ${device.name} connected successfully, starting polling...`);
+      this.emit('connected', deviceId);
+    } catch (error: any) {
+      console.error(`Connection error for ${device.name}:`, error);
+      const status = {
+        deviceId: device.id,
+        deviceName: device.name,
+        type: 'modbus' as const,
+        connected: false,
+        lastError: error.message,
+      };
+
+      if (this.connections.has(deviceId)) {
+        this.connections.delete(deviceId);
+      }
+
+      this.emit('error', deviceId, error);
+      throw error;
+    }
+  }
+
+  async disconnect(deviceId: string): Promise<void> {
+    const connection = this.connections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+
+    if (connection.pollTimer) {
+      clearInterval(connection.pollTimer);
+    }
+    if (connection.recordTimer) {
+      clearInterval(connection.recordTimer);
+    }
+
+    try {
+      if (connection.client.isOpen) {
+        connection.client.close(() => {});
+      }
+    } catch (error: any) {
+      console.error(`Error closing Modbus connection for ${deviceId}:`, error);
+    }
+
+    this.connections.delete(deviceId);
+    this.emit('disconnected', deviceId);
+  }
+
+  private startPolling(deviceId: string): void {
+    const connection = this.connections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        console.log(`Polling ${connection.registers.length} registers from ${connection.device.name}...`);
+        for (const register of connection.registers) {
+          console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
+          const timestamp = Date.now();
+          try {
+            const data = await this.readRegister(connection.client, register);
+            console.log(`Register ${register.name} value:`, data);
+
+            connection.lastRecordedData.set(register.id, {
+              value: data,
+              timestamp,
+              quality: 'good',
+              registerName: register.name,
+            });
+
+            const payload = {
+              deviceId,
+              registerId: register.id,
+              registerName: register.name,
+              value: data,
+              timestamp,
+              quality: 'good' as const,
+            };
+            this.emit('data', payload);
+            this.emit(`data:${deviceId}:${register.id}`, payload);
+
+            connection.status.messagesReceived = (connection.status.messagesReceived || 0) + 1;
+            connection.status.lastMessageTime = timestamp;
+          } catch (registerError: any) {
+            console.error(
+              `Error reading register ${register.name} (FC${register.functionCode}, Addr: ${register.address}) on device ${connection.device.name}:`,
+              registerError
+            );
+
+            connection.lastRecordedData.set(register.id, {
+              value: null,
+              timestamp,
+              quality: 'bad',
+              registerName: register.name,
+            });
+
+            const payload = {
+              deviceId,
+              registerId: register.id,
+              registerName: register.name,
+              value: null,
+              timestamp,
+              quality: 'bad' as const,
+            };
+            this.emit('data', payload);
+            this.emit(`data:${deviceId}:${register.id}`, payload);
+          }
+        }
+
+        connection.status.connected = true;
+        connection.status.lastError = undefined;
+        console.log(`Poll complete. Messages received: ${connection.status.messagesReceived}`);
+      } catch (error: any) {
+        console.error(`Polling error for device ${connection.device.name}:`, error);
+        console.error(`Error stack:`, error.stack);
+        connection.status.connected = false;
+        connection.status.lastError = error.message;
+        this.reconnect(deviceId);
+      }
+    };
+
+    poll();
+    connection.pollTimer = setInterval(poll, connection.device.pollInterval);
+  }
+
+  private startRecording(deviceId: string): void {
+    const connection = this.connections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+
+    const record = async () => {
+      try {
+        console.log(`Recording data for device ${connection.device.name}...`);
+        for (const [registerId, data] of connection.lastRecordedData.entries()) {
+          const payload = {
+            deviceId,
+            registerId,
+            registerName: data.registerName || 'Unknown',
+            value: data.value,
+            timestamp: data.timestamp,
+            quality: data.quality,
+          };
+          this.emit('dataRecord', payload);
+          this.emit(`dataRecord:${deviceId}:${registerId}`, payload);
+        }
+        console.log(`Recorded ${connection.lastRecordedData.size} data points for ${connection.device.name}`);
+      } catch (error: any) {
+        console.error(`Recording error for device ${connection.device.name}:`, error);
+      }
+    };
+
+    record();
+    connection.recordTimer = setInterval(record, connection.device.recordInterval || 5000);
+  }
+
+  private async readRegister(client: ModbusRTU, register: ModbusRegister): Promise<any> {
+    switch (register.functionCode) {
+      case 1: {
+        const rawData = await client.readCoils(register.address, register.quantity);
+        // Coils return boolean[], convert to number[] for parseData
+        return this.parseData(rawData.data.map((b: boolean) => b ? 1 : 0), register);
+      }
+      case 2: {
+        const rawData = await client.readDiscreteInputs(register.address, register.quantity);
+        // Discrete inputs return boolean[], convert to number[] for parseData
+        return this.parseData(rawData.data.map((b: boolean) => b ? 1 : 0), register);
+      }
+      case 3: {
+        const rawData = await client.readHoldingRegisters(register.address, register.quantity);
+        return this.parseData(rawData.data, register);
+      }
+      case 4: {
+        const rawData = await client.readInputRegisters(register.address, register.quantity);
+        return this.parseData(rawData.data, register);
+      }
+      default:
+        throw new Error(`Unsupported function code: ${register.functionCode}`);
+    }
+  }
+
+  private parseData(data: number[], register: ModbusRegister): any {
+    let value: any;
+    switch (register.dataType) {
+      case 'bool':
+        value = Boolean(data[0]);
+        break;
+      case 'int16':
+        value = this.bufferToInt16(data);
+        break;
+      case 'uint16':
+        value = data[0];
+        break;
+      case 'int32':
+        value = this.bufferToInt32(data, register);
+        break;
+      case 'uint32':
+        value = this.bufferToUInt32(data, register);
+        break;
+      case 'float':
+        value = this.bufferToFloat(data, register);
+        break;
+      case 'double':
+        value = this.bufferToDouble(data, register);
+        break;
+      default:
+        value = data[0];
+    }
+
+    if (typeof value === 'number') {
+      if (register.scaleFactor) {
+        value *= register.scaleFactor;
+      }
+      if (register.offset) {
+        value += register.offset;
+      }
+    }
+
+    return value;
+  }
+
+  private buildValueBuffer(data: number[], register: ModbusRegister, expectedBytes: number): Buffer {
+    const wordOrder = (register.wordOrder || 'BE').toUpperCase();
+    const byteOrder = (register.byteOrder || 'ABCD').toUpperCase();
+
+    const wordsNeeded = Math.ceil(expectedBytes / 2);
+    const words = data.slice(0, wordsNeeded);
+    while (words.length < wordsNeeded) {
+      words.push(0);
+    }
+
+    if (wordOrder === 'LE') {
+      for (let i = 0; i < words.length; i += 2) {
+        if (i + 1 < words.length) {
+          const temp = words[i];
+          words[i] = words[i + 1];
+          words[i + 1] = temp;
+        }
+      }
+    }
+
+    const bytes: number[] = [];
+    for (const word of words) {
+      bytes.push((word >> 8) & 0xff);
+      bytes.push(word & 0xff);
+    }
+
+    const orderMap: Record<string, number[]> = {
+      ABCD: [0, 1, 2, 3],
+      BADC: [1, 0, 3, 2],
+      CDAB: [2, 3, 0, 1],
+      DCBA: [3, 2, 1, 0],
+    };
+
+    if (expectedBytes === 4 && orderMap[byteOrder]) {
+      const indices = orderMap[byteOrder];
+      return Buffer.from(indices.map((idx) => bytes[idx]));
+    }
+
+    if (expectedBytes === 8 && orderMap[byteOrder]) {
+      const indices = orderMap[byteOrder];
+      const result: number[] = [];
+      for (let i = 0; i < expectedBytes; i += 4) {
+        const chunk = bytes.slice(i, i + 4);
+        if (chunk.length < 4) {
+          result.push(...chunk);
+          continue;
+        }
+        indices.forEach((idx) => {
+          result.push(chunk[idx]);
+        });
+      }
+      return Buffer.from(result);
+    }
+
+    return Buffer.from(bytes.slice(0, expectedBytes));
+  }
+
+  private bufferToInt16(data: number[]): number {
+    const value = data[0];
+    return value > 32767 ? value - 65536 : value;
+  }
+
+  private bufferToInt32(data: number[], register: ModbusRegister): number {
+    const buffer = this.buildValueBuffer(data, register, 4);
+    const value = buffer.readInt32BE(0);
+    return value > 2147483647 ? value - 4294967296 : value;
+  }
+
+  private bufferToUInt32(data: number[], register: ModbusRegister): number {
+    const buffer = this.buildValueBuffer(data, register, 4);
+    return buffer.readUInt32BE(0);
+  }
+
+  private bufferToFloat(data: number[], register: ModbusRegister): number {
+    const buffer = this.buildValueBuffer(data, register, 4);
+    return buffer.readFloatBE(0);
+  }
+
+  private bufferToDouble(data: number[], register: ModbusRegister): number {
+    const buffer = this.buildValueBuffer(data, register, 8);
+    return buffer.readDoubleBE(0);
+  }
+
+  private async autoDiscoverRegisters(
+    device: ModbusDevice,
+    client: ModbusRTU,
+    existingRegisters: ModbusRegister[]
+  ): Promise<ModbusRegister[]> {
+    const discovered: ModbusRegister[] = [];
+    const existingKeys = new Set(existingRegisters.map((r) => `${r.functionCode}:${r.address}`));
+    const addressRange = Array.from({ length: 10 }, (_, i) => i);
+
+    const tests: Array<{
+      functionCode: number;
+      quantity: number;
+      dataType: string;
+      namePrefix: string;
+    }> = [
+      { functionCode: 3, quantity: 2, dataType: 'uint16', namePrefix: 'Holding' },
+      { functionCode: 4, quantity: 2, dataType: 'uint16', namePrefix: 'Input' },
+      { functionCode: 1, quantity: 8, dataType: 'bool', namePrefix: 'Coil' },
+      { functionCode: 2, quantity: 8, dataType: 'bool', namePrefix: 'Discrete' },
+    ];
+
+    for (const test of tests) {
+      for (const address of addressRange) {
+        const key = `${test.functionCode}:${address}`;
+        if (existingKeys.has(key)) {
+          continue;
+        }
+
+        try {
+          let successful = false;
+
+          switch (test.functionCode) {
+            case 1: {
+              const response = await client.readCoils(address, test.quantity);
+              successful = Array.isArray(response?.data) && response.data.length > 0;
+              break;
+            }
+            case 2: {
+              const response = await client.readDiscreteInputs(address, test.quantity);
+              successful = Array.isArray(response?.data) && response.data.length > 0;
+              break;
+            }
+            case 3: {
+              const response = await client.readHoldingRegisters(address, test.quantity);
+              successful = Array.isArray(response?.data) && response.data.length > 0;
+              break;
+            }
+            case 4: {
+              const response = await client.readInputRegisters(address, test.quantity);
+              successful = Array.isArray(response?.data) && response.data.length > 0;
+              break;
+            }
+            default:
+              successful = false;
+          }
+
+          if (!successful) {
+            continue;
+          }
+
+          const register = this.db.createModbusRegister({
+            deviceId: device.id,
+            name: `${test.namePrefix} FC${test.functionCode} Addr ${address}`,
+            functionCode: test.functionCode,
+            address,
+            quantity: test.functionCode <= 2 ? 1 : test.quantity,
+            dataType: test.dataType,
+            byteOrder: test.functionCode <= 2 ? undefined : 'ABCD',
+            wordOrder: 'BE',
+          });
+
+          existingKeys.add(key);
+          discovered.push(register);
+
+          console.log(
+            `Auto-discovery: Created register ${register.name} (Function Code ${register.functionCode}, Address ${register.address})`
+          );
+
+          if (discovered.length >= 20) {
+            console.log('Auto-discovery limit reached (20 registers). Stopping scan.');
+            return this.db.getModbusRegisters(device.id);
+          }
+        } catch (error: any) {
+          console.warn(
+            `Auto-discovery read failed for FC${test.functionCode} address ${address}: ${error.message}`
+          );
+        }
+      }
+    }
+
+    if (discovered.length === 0) {
+      console.warn(
+        `Auto-discovery completed for device ${device.name} but no responsive registers were detected.`
+      );
+    }
+
+    return this.db.getModbusRegisters(device.id);
+  }
+
+  private async reconnect(deviceId: string): Promise<void> {
+    const connection = this.connections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+
+    await this.disconnect(deviceId);
+    setTimeout(async () => {
+      try {
+        await this.connect(deviceId);
+      } catch (error: any) {
+        console.error(`Reconnection failed for device ${deviceId}:`, error);
+      }
+    }, 5000);
+  }
+
+  getConnectionStatus(): any[] {
+    return Array.from(this.connections.values()).map((conn) => conn.status);
+  }
+
+  cleanup(): void {
+    for (const deviceId of this.connections.keys()) {
+      this.disconnect(deviceId);
+    }
+  }
+
+  updateDeviceRegisters(deviceId: string, registers: ModbusRegister[]): void {
+    const connection = this.connections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+
+    connection.registers = registers;
+    const updatedDevice = this.db.getModbusDeviceById(deviceId);
+    if (updatedDevice) {
+      connection.device = updatedDevice;
+    }
+    // Remove cached data for registers that no longer exist
+    const registerIds = new Set(registers.map((reg) => reg.id));
+    for (const existingId of Array.from(connection.lastRecordedData.keys())) {
+      if (!registerIds.has(existingId)) {
+        connection.lastRecordedData.delete(existingId);
+      }
+    }
+  }
+}
+
