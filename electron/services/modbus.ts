@@ -49,12 +49,16 @@ export class ModbusService extends EventEmitter {
     console.log(`Type: ${device.type}, Host: ${device.host}, Port: ${device.port}, Slave ID: ${device.slaveId}`);
     console.log(`Registers configured: ${registers.length}`);
 
+    const type = (device.type || '').toString().toLowerCase();
     try {
-      if (device.type === 'tcp') {
-        console.log(`Attempting TCP connection to ${device.host}:${device.port || 502}...`);
-        await client.connectTCP(device.host!, { port: device.port || 502 });
+      if (type === 'tcp') {
+        const host = (device.host || '').trim();
+        const port = device.port || 502;
+        if (!host) throw new Error('TCP host is required');
+        console.log(`Attempting TCP connection to ${host}:${port}...`);
+        await client.connectTCP(host, { port });
         console.log(`TCP connection successful`);
-      } else if (device.type === 'rtu') {
+      } else if (type === 'rtu') {
         console.log(`Attempting RTU connection to ${device.serialPort}...`);
         await client.connectRTUBuffered(device.serialPort!, {
           baudRate: device.baudRate || 9600,
@@ -63,6 +67,8 @@ export class ModbusService extends EventEmitter {
           parity: (device.parity as 'none' | 'even' | 'odd' | 'mark' | 'space') || 'none',
         });
         console.log(`RTU connection successful`);
+      } else {
+        throw new Error(`Unsupported device type: ${device.type}. Use TCP or RTU.`);
       }
 
       client.setID(device.slaveId);

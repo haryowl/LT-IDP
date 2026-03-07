@@ -21,6 +21,7 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import {
@@ -77,6 +78,7 @@ const ModbusDevices: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<Record<string, boolean>>({});
+  const [connectionErrors, setConnectionErrors] = useState<Record<string, string>>({});
 
   const [registerDialogOpen, setRegisterDialogOpen] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<ModbusDevice | null>(null);
@@ -161,12 +163,25 @@ const ModbusDevices: React.FC = () => {
   const loadConnectionStatus = async () => {
     try {
       const status = await api.modbus?.getStatus();
-      const connections = status?.connections || {};
       const statusMap: Record<string, boolean> = {};
-      Object.keys(connections).forEach((id) => {
-        statusMap[id] = connections[id]?.connected || false;
-      });
+      const errorMap: Record<string, string> = {};
+      // API returns an array of status objects (web server) or may return { connections } (Electron)
+      if (Array.isArray(status)) {
+        status.forEach((s: { deviceId?: string; connected?: boolean; lastError?: string }) => {
+          if (s?.deviceId != null) {
+            statusMap[s.deviceId] = !!s.connected;
+            if (s.lastError) errorMap[s.deviceId] = s.lastError;
+          }
+        });
+      } else {
+        const connections = status?.connections || {};
+        Object.keys(connections).forEach((id) => {
+          statusMap[id] = connections[id]?.connected || false;
+          if (connections[id]?.lastError) errorMap[id] = connections[id].lastError;
+        });
+      }
       setConnectionStatus(statusMap);
+      setConnectionErrors(errorMap);
     } catch (err) {
       console.error('Failed to load connection status:', err);
     }
@@ -491,12 +506,19 @@ const ModbusDevices: React.FC = () => {
                 <TableCell>{device.slaveId}</TableCell>
                 <TableCell>{device.pollInterval}ms</TableCell>
                 <TableCell>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Chip
-                      label={connectionStatus[device.id] ? 'Connected' : 'Disconnected'}
-                      color={connectionStatus[device.id] ? 'success' : 'default'}
-                      size="small"
-                    />
+                  <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+                    <Tooltip title={connectionErrors[device.id] || (connectionStatus[device.id] ? 'Connected' : '')}>
+                      <Chip
+                        label={connectionStatus[device.id] ? 'Connected' : 'Disconnected'}
+                        color={connectionStatus[device.id] ? 'success' : 'default'}
+                        size="small"
+                      />
+                    </Tooltip>
+                    {connectionErrors[device.id] && (
+                      <Typography variant="caption" color="error" component="span" sx={{ maxWidth: 200 }} noWrap title={connectionErrors[device.id]}>
+                        {connectionErrors[device.id]}
+                      </Typography>
+                    )}
                     <FormControlLabel
                       control={
                         <Switch
