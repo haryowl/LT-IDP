@@ -27,7 +27,13 @@ async function request<T = any>(method: string, path: string, body?: any): Promi
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(url, { method, headers, body: body != null ? JSON.stringify(body) : undefined, credentials: 'include' });
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body != null ? JSON.stringify(body) : undefined,
+    credentials: 'include',
+    cache: 'no-store',
+  });
   const text = await res.text();
   if (!res.ok) {
     const err = new Error(JSON.parse(text)?.error || text || res.statusText);
