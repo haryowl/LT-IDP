@@ -3,12 +3,21 @@ import { EventEmitter } from 'events';
 import type { DatabaseService } from './database';
 import type { ModbusDevice, ModbusRegister } from '../types';
 
+/** If no successful poll for this long (ms), force reconnect. */
+const BAD_CONNECTION_THRESHOLD_MS = 20_000;
+/** Delay before first reconnect attempt after failure (ms). */
+const RECONNECT_DELAY_MS = 5_000;
+/** Delay before retry when reconnect attempt fails (ms). */
+const RECONNECT_RETRY_DELAY_MS = 10_000;
+
 interface ModbusConnection {
   device: ModbusDevice;
   client: ModbusRTU;
   registers: ModbusRegister[];
   pollTimer?: NodeJS.Timeout;
   recordTimer?: NodeJS.Timeout;
+  /** Timestamp of last poll that had at least one successful register read. */
+  lastSuccessfulPollTime?: number;
   status: {
     deviceId: string;
     deviceName: string;
@@ -92,6 +101,7 @@ export class ModbusService extends EventEmitter {
         device,
         client,
         registers,
+        lastSuccessfulPollTime: Date.now(),
         status: {
           deviceId: device.id,
           deviceName: device.name,
@@ -159,8 +169,23 @@ export class ModbusService extends EventEmitter {
     }
 
     const poll = async () => {
+      const connectionNow = this.connections.get(deviceId);
+      if (!connectionNow) return;
+      const now = Date.now();
+      if (
+        connectionNow.lastSuccessfulPollTime != null &&
+        now - connectionNow.lastSuccessfulPollTime > BAD_CONNECTION_THRESHOLD_MS
+      ) {
+        console.log(
+          `Modbus device ${connectionNow.device.name}: no good data for ${BAD_CONNECTION_THRESHOLD_MS / 1000}s, reconnecting...`
+        );
+        this.reconnect(deviceId);
+        return;
+      }
+
       try {
         console.log(`Polling ${connection.registers.length} registers from ${connection.device.name}...`);
+        let successCount = 0;
         for (const register of connection.registers) {
           console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
           const timestamp = Date.now();
@@ -188,6 +213,7 @@ export class ModbusService extends EventEmitter {
 
             connection.status.messagesReceived = (connection.status.messagesReceived || 0) + 1;
             connection.status.lastMessageTime = timestamp;
+            successCount++;
           } catch (registerError: any) {
             console.error(
               `Error reading register ${register.name} (FC${register.functionCode}, Addr: ${register.address}) on device ${connection.device.name}:`,
@@ -214,8 +240,24 @@ export class ModbusService extends EventEmitter {
           }
         }
 
-        connection.status.connected = true;
-        connection.status.lastError = undefined;
+        if (successCount > 0) {
+          connection.lastSuccessfulPollTime = Date.now();
+          connection.status.connected = true;
+          connection.status.lastError = undefined;
+        } else if (connection.registers.length > 0) {
+          connection.status.connected = false;
+          connection.status.lastError = 'All registers failed this poll';
+          if (
+            connection.lastSuccessfulPollTime != null &&
+            now - connection.lastSuccessfulPollTime > BAD_CONNECTION_THRESHOLD_MS
+          ) {
+            console.log(
+              `Modbus device ${connection.device.name}: bad for ${BAD_CONNECTION_THRESHOLD_MS / 1000}s, reconnecting...`
+            );
+            this.reconnect(deviceId);
+            return;
+          }
+        }
         console.log(`Poll complete. Messages received: ${connection.status.messagesReceived}`);
       } catch (error: any) {
         console.error(`Polling error for device ${connection.device.name}:`, error);
@@ -515,13 +557,24 @@ export class ModbusService extends EventEmitter {
     }
 
     await this.disconnect(deviceId);
+    this.scheduleReconnect(deviceId, RECONNECT_DELAY_MS);
+  }
+
+  /** Schedule a reconnect attempt; on failure, reschedule after RECONNECT_RETRY_DELAY_MS. */
+  private scheduleReconnect(deviceId: string, delayMs: number): void {
     setTimeout(async () => {
+      const device = this.db.getModbusDeviceById(deviceId);
+      if (!device || !device.enabled) {
+        return;
+      }
       try {
         await this.connect(deviceId);
+        console.log(`Modbus device ${device.name} reconnected successfully.`);
       } catch (error: any) {
-        console.error(`Reconnection failed for device ${deviceId}:`, error);
+        console.error(`Reconnection failed for device ${deviceId}, retrying in ${RECONNECT_RETRY_DELAY_MS / 1000}s:`, error?.message);
+        this.scheduleReconnect(deviceId, RECONNECT_RETRY_DELAY_MS);
       }
-    }, 5000);
+    }, delayMs);
   }
 
   getConnectionStatus(): any[] {
