@@ -631,7 +631,7 @@ export class DatabaseService {
           id, name, type, enabled, auto_start, host, port, serial_port, baud_rate,
           data_bits, stop_bits, parity, slave_id, poll_interval, record_interval, timeout,
           retry_attempts, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
