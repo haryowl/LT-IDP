@@ -206,7 +206,18 @@ export class MqttSubscriberService extends EventEmitter {
   }
 
   getConnectionStatus(): any[] {
-    return Array.from(this.connections.values()).map((conn) => conn.status);
+    const allDevices = this.db.getMqttDevices();
+    return allDevices.map((device) => {
+      const conn = this.connections.get(device.id);
+      if (conn) return conn.status;
+      return {
+        deviceId: device.id,
+        deviceName: device.name,
+        type: 'mqtt' as const,
+        connected: false,
+        lastError: undefined,
+      };
+    });
   }
 
   cleanup(): void {

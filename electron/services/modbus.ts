@@ -525,7 +525,18 @@ export class ModbusService extends EventEmitter {
   }
 
   getConnectionStatus(): any[] {
-    return Array.from(this.connections.values()).map((conn) => conn.status);
+    const allDevices = this.db.getModbusDevices();
+    return allDevices.map((device) => {
+      const conn = this.connections.get(device.id);
+      if (conn) return conn.status;
+      return {
+        deviceId: device.id,
+        deviceName: device.name,
+        type: 'modbus' as const,
+        connected: false,
+        lastError: undefined,
+      };
+    });
   }
 
   cleanup(): void {

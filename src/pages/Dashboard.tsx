@@ -15,7 +15,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
 } from '@mui/icons-material';
-import api from '../api/client';
+import api, { normalizeConnectionStatus } from '../api/client';
 
 interface DashboardStats {
   modbusDevices: number;
@@ -56,17 +56,10 @@ const Dashboard: React.FC = () => {
           api.mqtt.getStatus().catch(() => ({})),
         ]);
 
-        // API returns array of status objects (web server); fallback to .connections object (Electron)
-        const modbusConnectedCount = Array.isArray(modbusStatus)
-          ? modbusStatus.filter((s: any) => s?.connected).length
-          : Object.keys(modbusStatus?.connections || {}).filter(
-              (key) => modbusStatus.connections[key]?.connected
-            ).length;
-        const mqttConnectedCount = Array.isArray(mqttStatus)
-          ? mqttStatus.filter((s: any) => s?.connected).length
-          : Object.keys(mqttStatus?.connections || {}).filter(
-              (key) => mqttStatus.connections[key]?.connected
-            ).length;
+        const modbusList = normalizeConnectionStatus(modbusStatus || []);
+        const mqttList = normalizeConnectionStatus(mqttStatus || []);
+        const modbusConnectedCount = modbusList.filter((s) => s.connected).length;
+        const mqttConnectedCount = mqttList.filter((s) => s.connected).length;
 
         setStats({
           modbusDevices: Array.isArray(modbusDevices) ? modbusDevices.length : 0,

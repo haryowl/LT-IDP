@@ -44,6 +44,18 @@ export function getWebSocketUrl(): string {
   return `${proto}://${host}`;
 }
 
+/** Normalize modbus/mqtt getStatus() response to an array of { deviceId, connected, lastError?, ... } */
+export function normalizeConnectionStatus(status: any): { deviceId: string; connected: boolean; lastError?: string }[] {
+  if (Array.isArray(status)) return status;
+  if (status && Array.isArray(status.data)) return status.data;
+  const conn = status?.connections || {};
+  return Object.keys(conn).map((id) => ({
+    deviceId: id,
+    connected: !!conn[id]?.connected,
+    lastError: conn[id]?.lastError,
+  }));
+}
+
 // Shared WebSocket for log/event channels (modbus:data, mqtt:data, publisher:log) in web mode
 const LOG_CHANNELS = ['modbus:data', 'mqtt:data', 'publisher:log'] as const;
 type LogChannel = (typeof LOG_CHANNELS)[number];

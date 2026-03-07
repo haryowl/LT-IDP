@@ -32,7 +32,7 @@ import {
   Stop as StopIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
-import api from '../api/client';
+import api, { normalizeConnectionStatus } from '../api/client';
 
 interface ModbusDevice {
   id: string;
@@ -163,23 +163,15 @@ const ModbusDevices: React.FC = () => {
   const loadConnectionStatus = async () => {
     try {
       const status = await api.modbus?.getStatus();
+      const list = normalizeConnectionStatus(status || []);
       const statusMap: Record<string, boolean> = {};
       const errorMap: Record<string, string> = {};
-      // API returns an array of status objects (web server) or may return { connections } (Electron)
-      if (Array.isArray(status)) {
-        status.forEach((s: { deviceId?: string; connected?: boolean; lastError?: string }) => {
-          if (s?.deviceId != null) {
-            statusMap[s.deviceId] = !!s.connected;
-            if (s.lastError) errorMap[s.deviceId] = s.lastError;
-          }
-        });
-      } else {
-        const connections = status?.connections || {};
-        Object.keys(connections).forEach((id) => {
-          statusMap[id] = connections[id]?.connected || false;
-          if (connections[id]?.lastError) errorMap[id] = connections[id].lastError;
-        });
-      }
+      list.forEach((s) => {
+        if (s.deviceId != null) {
+          statusMap[s.deviceId] = s.connected;
+          if (s.lastError) errorMap[s.deviceId] = s.lastError;
+        }
+      });
       setConnectionStatus(statusMap);
       setConnectionErrors(errorMap);
     } catch (err) {
