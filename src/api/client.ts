@@ -44,6 +44,52 @@ export function getWebSocketUrl(): string {
   return `${proto}://${host}`;
 }
 
+// Shared WebSocket for log/event channels (modbus:data, mqtt:data, publisher:log) in web mode
+const LOG_CHANNELS = ['modbus:data', 'mqtt:data', 'publisher:log'] as const;
+type LogChannel = (typeof LOG_CHANNELS)[number];
+const wsEventListeners: { channel: string; callback: (...args: any[]) => void }[] = [];
+let wsForEvents: WebSocket | null = null;
+
+function ensureWsForEvents(): void {
+  if (typeof window === 'undefined') return;
+  if (wsForEvents?.readyState === WebSocket.OPEN) return;
+  if (wsForEvents != null) return; // connecting or closed, will reconnect on next use
+  const url = getWebSocketUrl();
+  const ws = new WebSocket(`${url}/api/ws`);
+  wsForEvents = ws;
+  ws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data as string);
+      if (!m || typeof m.type !== 'string') return;
+      const data = m.data !== undefined ? m.data : m;
+      wsEventListeners.forEach(({ channel, callback }) => {
+        if (m.type === channel) callback(data);
+      });
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    wsForEvents = null;
+    if (wsEventListeners.length > 0) setTimeout(ensureWsForEvents, 2000);
+  };
+  ws.onerror = () => {
+    wsForEvents = null;
+  };
+}
+
+function subscribeLogChannel(channel: string, callback: (...args: any[]) => void): () => void {
+  if (!LOG_CHANNELS.includes(channel as LogChannel)) return () => {};
+  wsEventListeners.push({ channel, callback });
+  ensureWsForEvents();
+  return () => {
+    const i = wsEventListeners.findIndex((e) => e.channel === channel && e.callback === callback);
+    if (i !== -1) wsEventListeners.splice(i, 1);
+    if (wsEventListeners.length === 0 && wsForEvents) {
+      wsForEvents.close();
+      wsForEvents = null;
+    }
+  };
+}
+
 export const api = {
   auth: {
     login: async (credentials: { username: string; password: string }) => {
@@ -109,6 +155,7 @@ export const api = {
   on: (channel: string, callback: (...args: any[]) => void) => {
     if (isElectron) return (window as any).electronAPI.on(channel, callback);
     if (channel === 'data:realtime') return api.data.onRealtimeData(callback);
+    if (LOG_CHANNELS.includes(channel as LogChannel)) return subscribeLogChannel(channel, callback);
     return () => {};
   },
 };

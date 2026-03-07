@@ -56,20 +56,25 @@ const Dashboard: React.FC = () => {
           api.mqtt.getStatus().catch(() => ({})),
         ]);
 
-        const modbusConnections = modbusStatus.connections || {};
-        const mqttConnections = mqttStatus.connections || {};
+        // API returns array of status objects (web server); fallback to .connections object (Electron)
+        const modbusConnectedCount = Array.isArray(modbusStatus)
+          ? modbusStatus.filter((s: any) => s?.connected).length
+          : Object.keys(modbusStatus?.connections || {}).filter(
+              (key) => modbusStatus.connections[key]?.connected
+            ).length;
+        const mqttConnectedCount = Array.isArray(mqttStatus)
+          ? mqttStatus.filter((s: any) => s?.connected).length
+          : Object.keys(mqttStatus?.connections || {}).filter(
+              (key) => mqttStatus.connections[key]?.connected
+            ).length;
 
         setStats({
           modbusDevices: Array.isArray(modbusDevices) ? modbusDevices.length : 0,
           mqttDevices: Array.isArray(mqttDevices) ? mqttDevices.length : 0,
           mappings: Array.isArray(mappings) ? mappings.length : 0,
           publishers: Array.isArray(publishers) ? publishers.length : 0,
-          modbusConnected: Object.keys(modbusConnections).filter(
-            (key) => modbusConnections[key]?.connected
-          ).length,
-          mqttConnected: Object.keys(mqttConnections).filter(
-            (key) => mqttConnections[key]?.connected
-          ).length,
+          modbusConnected: modbusConnectedCount,
+          mqttConnected: mqttConnectedCount,
         });
       } catch (error) {
         console.error('Failed to load dashboard stats:', error);
