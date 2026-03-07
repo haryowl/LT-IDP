@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { app } from 'electron';
 import mqtt, { MqttClient } from 'mqtt';
 import type { MqttBrokerConfig } from '../types';
 
@@ -22,11 +21,11 @@ export class MqttBrokerService extends EventEmitter {
   private configDir: string;
   private dataDir: string;
 
-  constructor() {
+  constructor(userDataPath?: string) {
     super();
-    const userDataPath = app.getPath('userData');
-    this.configDir = path.join(userDataPath, 'mqtt-broker');
-    this.dataDir = path.join(userDataPath, 'mqtt-data');
+    const base = userDataPath ?? (() => { try { return require('electron').app.getPath('userData'); } catch { return process.cwd(); } })();
+    this.configDir = path.join(base, 'mqtt-broker');
+    this.dataDir = path.join(base, 'mqtt-data');
 
     if (!fs.existsSync(this.configDir)) {
       fs.mkdirSync(this.configDir, { recursive: true });

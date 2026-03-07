@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import { useAuthStore } from '../store/authStore';
 import { useErrorSnackbar } from '../contexts/ErrorSnackbarContext';
+import api from '../api/client';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -28,11 +29,7 @@ const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      if (!window.electronAPI?.auth?.login) {
-        throw new Error('Electron API not available');
-      }
-
-      const result = await window.electronAPI.auth.login({
+      const result = await api.auth.login({
         username,
         password,
       });

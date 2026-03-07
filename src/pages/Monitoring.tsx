@@ -13,6 +13,7 @@ import {
   Alert,
 } from '@mui/material';
 import { useErrorSnackbar } from '../contexts/ErrorSnackbarContext';
+import api from '../api/client';
 
 interface RealtimeData {
   mappingId: string;
@@ -34,7 +35,7 @@ const Monitoring: React.FC = () => {
     let unsubscribe: (() => void) | undefined;
     const load = async () => {
       try {
-        const list = await window.electronAPI.mappings?.list();
+        const list = await api.mappings.list();
         const next = Array.isArray(list) ? list : [];
         setMappings(next);
       } catch (err: any) {
@@ -45,7 +46,7 @@ const Monitoring: React.FC = () => {
     };
     load();
 
-    unsubscribe = window.electronAPI.on?.('data:realtime', (realtimeData: RealtimeData) => {
+    unsubscribe = api.on('data:realtime', (realtimeData: RealtimeData) => {
       setData((prev) => ({
         ...prev,
         [realtimeData.mappingId]: realtimeData,
@@ -60,7 +61,7 @@ const Monitoring: React.FC = () => {
   useEffect(() => {
     if (mappings.length === 0) return;
     const mappingIds = mappings.map((m) => m.id);
-    window.electronAPI.data?.subscribeRealtime(mappingIds).catch((err: any) => {
+    api.data.subscribeRealtime(mappingIds).catch((err: any) => {
       const msg = err?.message || 'Failed to subscribe to realtime data';
       setError(msg);
       showError(msg);

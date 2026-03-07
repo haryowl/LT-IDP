@@ -36,6 +36,7 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 interface Publisher {
   id: string;
   name: string;
@@ -123,7 +124,7 @@ const Publishers: React.FC = () => {
 
   const loadPublishers = async () => {
     try {
-      const data = await window.electronAPI.publishers?.list();
+      const data = await api.publishers?.list();
       setPublishers(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load publishers');
@@ -132,7 +133,7 @@ const Publishers: React.FC = () => {
 
   const loadMappings = async () => {
     try {
-      const data = await window.electronAPI.mappings?.list();
+      const data = await api.mappings?.list();
       setMappings(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load mappings:', err);
@@ -242,9 +243,9 @@ const Publishers: React.FC = () => {
       }
 
       if (editing) {
-        await window.electronAPI.publishers?.update(editing.id, payload);
+        await api.publishers?.update(editing.id, payload);
       } else {
-        await window.electronAPI.publishers?.create(payload);
+        await api.publishers?.create(payload);
       }
       await loadPublishers();
       handleClose();
@@ -257,7 +258,7 @@ const Publishers: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this publisher?')) return;
 
     try {
-      await window.electronAPI.publishers?.delete(id);
+      await api.publishers?.delete(id);
       await loadPublishers();
     } catch (err: any) {
       setError(err.message || 'Failed to delete publisher');
@@ -266,7 +267,7 @@ const Publishers: React.FC = () => {
 
   const handleToggle = async (id: string, enabled: boolean) => {
     try {
-      await window.electronAPI.publishers?.toggle(id, enabled);
+      await api.publishers?.toggle(id, enabled);
       await loadPublishers();
     } catch (err: any) {
       setError(err.message || 'Failed to toggle publisher');
@@ -275,7 +276,7 @@ const Publishers: React.FC = () => {
 
   const handleAutoStartToggle = async (publisher: Publisher) => {
     try {
-      await window.electronAPI.publishers?.update(publisher.id, {
+      await api.publishers?.update(publisher.id, {
         autoStart: !publisher.autoStart,
       });
       await loadPublishers();

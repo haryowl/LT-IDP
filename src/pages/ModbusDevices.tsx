@@ -31,6 +31,7 @@ import {
   Stop as StopIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface ModbusDevice {
   id: string;
@@ -141,7 +142,7 @@ const ModbusDevices: React.FC = () => {
 
   const loadDevices = async () => {
     try {
-      const data = await window.electronAPI.modbus?.devices?.list();
+      const data = await api.modbus?.devices?.list();
       const deviceList = Array.isArray(data) ? data : [];
       setDevices(deviceList);
       if (selectedDevice) {
@@ -159,7 +160,7 @@ const ModbusDevices: React.FC = () => {
 
   const loadConnectionStatus = async () => {
     try {
-      const status = await window.electronAPI.modbus?.getStatus();
+      const status = await api.modbus?.getStatus();
       const connections = status?.connections || {};
       const statusMap: Record<string, boolean> = {};
       Object.keys(connections).forEach((id) => {
@@ -174,7 +175,7 @@ const ModbusDevices: React.FC = () => {
   const loadDeviceRegisters = async (deviceId: string) => {
     try {
       setRegisterLoading(true);
-      const data = await window.electronAPI.modbus?.registers?.list(deviceId);
+      const data = await api.modbus?.registers?.list(deviceId);
       setRegisters(Array.isArray(data) ? data : []);
       setRegisterError('');
     } catch (err: any) {
@@ -243,7 +244,7 @@ const ModbusDevices: React.FC = () => {
     }
 
     try {
-      await window.electronAPI.modbus?.registers?.delete(registerId);
+      await api.modbus?.registers?.delete(registerId);
       await loadDeviceRegisters(selectedDevice.id);
     } catch (err: any) {
       setRegisterError(err.message || 'Failed to delete register');
@@ -305,9 +306,9 @@ const ModbusDevices: React.FC = () => {
     try {
       if (registerEditing) {
         const { deviceId: _omit, ...updatePayload } = payload;
-        await window.electronAPI.modbus?.registers?.update(registerEditing.id, updatePayload);
+        await api.modbus?.registers?.update(registerEditing.id, updatePayload);
       } else {
-        await window.electronAPI.modbus?.registers?.create(payload);
+        await api.modbus?.registers?.create(payload);
       }
       await loadDeviceRegisters(selectedDevice.id);
       handleRegisterFormClose();
@@ -374,9 +375,9 @@ const ModbusDevices: React.FC = () => {
       const deviceData = { ...formData };
 
       if (editing) {
-        await window.electronAPI.modbus?.devices?.update(editing.id, deviceData);
+        await api.modbus?.devices?.update(editing.id, deviceData);
       } else {
-        await window.electronAPI.modbus?.devices?.create(deviceData);
+        await api.modbus?.devices?.create(deviceData);
       }
 
       await loadDevices();
@@ -390,7 +391,7 @@ const ModbusDevices: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this device?')) return;
 
     try {
-      await window.electronAPI.modbus?.devices?.delete(id);
+      await api.modbus?.devices?.delete(id);
       await loadDevices();
     } catch (err: any) {
       setError(err.message || 'Failed to delete device');
@@ -399,7 +400,7 @@ const ModbusDevices: React.FC = () => {
 
   const handleToggle = async (device: ModbusDevice) => {
     try {
-      await window.electronAPI.modbus?.devices?.update(device.id, {
+      await api.modbus?.devices?.update(device.id, {
         ...device,
         enabled: !device.enabled,
       });
@@ -411,7 +412,7 @@ const ModbusDevices: React.FC = () => {
 
   const handleAutoStartToggle = async (device: ModbusDevice) => {
     try {
-      await window.electronAPI.modbus?.devices?.update(device.id, {
+      await api.modbus?.devices?.update(device.id, {
         ...device,
         autoStart: !device.autoStart,
       });
@@ -424,7 +425,7 @@ const ModbusDevices: React.FC = () => {
   const handleConnect = async (id: string) => {
     try {
       setError('');
-      await window.electronAPI.modbus?.connect(id);
+      await api.modbus?.connect(id);
       await loadConnectionStatus();
       await loadDevices();
       if (registerDialogOpen && selectedDevice?.id === id) {
@@ -437,7 +438,7 @@ const ModbusDevices: React.FC = () => {
 
   const handleDisconnect = async (id: string) => {
     try {
-      await window.electronAPI.modbus?.disconnect(id);
+      await api.modbus?.disconnect(id);
       await loadConnectionStatus();
       await loadDevices();
     } catch (err: any) {

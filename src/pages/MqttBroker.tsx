@@ -19,6 +19,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface MqttBrokerConfig {
   id: string;
@@ -58,7 +59,7 @@ const MqttBroker: React.FC = () => {
   useEffect(() => {
     const getLocalIp = async () => {
       try {
-        const ip = await window.electronAPI.system?.getLocalIp();
+        const ip = await api.system?.getLocalIp();
         setLocalIp(ip || 'localhost');
       } catch (err) {
         console.error('Failed to get local IP:', err);
@@ -79,7 +80,7 @@ const MqttBroker: React.FC = () => {
   const loadConfig = async () => {
     try {
       setLoading(true);
-      const data = await window.electronAPI.mqtt?.broker?.get();
+      const data = await api.mqtt?.broker?.get();
       if (data) {
         setConfig({ ...data, autoStart: !!data.autoStart });
       } else {
@@ -110,7 +111,7 @@ const MqttBroker: React.FC = () => {
         persistenceEnabled: true,
         logLevel: 'warning',
       };
-      const saved = await window.electronAPI.mqtt?.broker?.save(defaultConfig);
+      const saved = await api.mqtt?.broker?.save(defaultConfig);
       if (saved) {
         setConfig({ ...saved, autoStart: !!saved.autoStart });
       } else {
@@ -156,7 +157,7 @@ const MqttBroker: React.FC = () => {
 
   const loadStatus = async () => {
     try {
-      const data = await window.electronAPI.mqtt?.broker?.getStatus();
+      const data = await api.mqtt?.broker?.getStatus();
       console.log('[MQTT Broker] Status:', data);
       setStatus(data);
     } catch (err) {
@@ -166,7 +167,7 @@ const MqttBroker: React.FC = () => {
 
   const checkInstalled = async () => {
     try {
-      const installed = await window.electronAPI.mqtt?.broker?.checkInstalled();
+      const installed = await api.mqtt?.broker?.checkInstalled();
       setIsInstalled(installed);
     } catch (err) {
       console.error('Failed to check if Mosquitto is installed:', err);
@@ -181,7 +182,7 @@ const MqttBroker: React.FC = () => {
       setError('');
       setSuccess('');
 
-      const updated = await window.electronAPI.mqtt?.broker?.save(config);
+      const updated = await api.mqtt?.broker?.save(config);
       setConfig(updated);
       setSuccess('Configuration saved successfully');
       setTimeout(() => setSuccess(''), 3000);
@@ -199,7 +200,7 @@ const MqttBroker: React.FC = () => {
       setSuccess('');
 
       console.log('[MQTT Broker] Starting broker...');
-      await window.electronAPI.mqtt?.broker?.start();
+      await api.mqtt?.broker?.start();
       console.log('[MQTT Broker] Broker started successfully');
       setSuccess('Broker started successfully');
       setTimeout(() => setSuccess(''), 3000);
@@ -222,7 +223,7 @@ const MqttBroker: React.FC = () => {
       setError('');
       setSuccess('');
 
-      await window.electronAPI.mqtt?.broker?.stop();
+      await api.mqtt?.broker?.stop();
       setSuccess('Broker stopped successfully');
       setTimeout(() => setSuccess(''), 3000);
       await loadStatus();

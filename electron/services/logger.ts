@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { app } from 'electron';
 
 export class Logger {
   private logDir: string;
@@ -9,21 +8,9 @@ export class Logger {
   private currentDate: string;
   private logStream: fs.WriteStream | null = null;
 
-  constructor() {
-    // Use app.getPath('userData') if available, otherwise use process.cwd()
-    let baseDir: string;
-    try {
-      if (app && app.isReady()) {
-        baseDir = app.getPath('userData');
-      } else {
-        // Fallback to userData path even if app not ready (for Windows: %APPDATA%)
-        baseDir = path.join(os.homedir(), 'AppData', 'Roaming', 'ClientAPP');
-      }
-    } catch {
-      baseDir = process.cwd();
-    }
-    
-    this.logDir = path.join(baseDir, 'logs');
+  constructor(baseDir?: string) {
+    const dir = baseDir ?? path.join(os.homedir(), process.platform === 'win32' ? 'AppData/Roaming/ClientAPP' : '.config/ClientAPP');
+    this.logDir = path.join(dir, 'logs');
     this.currentDate = this.getDateString();
     this.currentLogFile = path.join(this.logDir, `app-${this.currentDate}.log`);
 
@@ -159,9 +146,9 @@ export class Logger {
 // Global logger instance
 let loggerInstance: Logger | null = null;
 
-export function getLogger(): Logger {
+export function getLogger(baseDir?: string): Logger {
   if (!loggerInstance) {
-    loggerInstance = new Logger();
+    loggerInstance = new Logger(baseDir);
   }
   return loggerInstance;
 }

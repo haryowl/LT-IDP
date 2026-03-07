@@ -1,14 +1,15 @@
 # IoT SCADA Client (LT IDP)
 
-A cross-platform desktop application for industrial IoT: collect data from Modbus and MQTT, map to parameters, store history, monitor in real time, and publish to MQTT/HTTP or the SPARING API.
+A cross-platform **desktop (Electron)** or **web** application for industrial IoT: collect data from Modbus and MQTT, map to parameters, store history, monitor in real time, and publish to MQTT/HTTP or the SPARING API.
 
 **Branding:** LT IDP — Integrated Data Parser.
 
 ## Tech stack
 
 - **Frontend:** React 18, TypeScript, Vite, MUI 5, Zustand, React Router 6, Recharts
-- **Desktop:** Electron 28 (context isolation, no Node in renderer)
-- **Backend (main process):** Node, SQLite (`better-sqlite3`), `modbus-serial`, `mqtt`, `serialport`
+- **Desktop (optional):** Electron 28 (context isolation, no Node in renderer)
+- **Web:** Express server (Node), same business logic as Electron main process
+- **Backend:** Node, SQLite (`better-sqlite3`), `modbus-serial`, `mqtt`, `serialport`
 - **Auth:** Local JWT + bcrypt, users in SQLite
 
 ## Prerequisites
@@ -26,7 +27,7 @@ For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need
 
 ## Run (development)
 
-Start the Vite dev server and Electron together:
+**Electron (desktop):**
 
 ```bash
 npm run dev
@@ -34,6 +35,16 @@ npm run dev
 
 - Frontend: http://localhost:3000 (hot-reload)
 - Electron loads the dev URL and opens DevTools
+
+**Web (browser, no Electron):**
+
+```bash
+npm run dev:web
+```
+
+- Frontend: http://localhost:3000 (Vite, hot-reload)
+- API server: http://localhost:3001 (Express). Vite proxies `/api` and `/api/ws` to the server.
+- Open http://localhost:3000 in your browser. Works on headless servers (Linux) and anywhere you can run Node.
 
 ## Build
 
@@ -98,14 +109,18 @@ Uses Vitest and Testing Library. Tests live under `src/**/*.test.{ts,tsx}`. Main
 
 ## Scripts
 
-| Script           | Description                    |
-|------------------|--------------------------------|
-| `npm run dev`    | Vite + Electron (development)  |
-| `npm run build`  | Vite build + Electron TS build |
-| `npm run build:app` | electron-builder (installer) |
-| `npm start`      | Run packaged Electron app      |
-| `npm run preview`| Vite preview (web only)        |
-| `npm test`       | Run unit tests                 |
+| Script           | Description                        |
+|------------------|------------------------------------|
+| `npm run dev`    | Vite + Electron (desktop dev)      |
+| `npm run dev:web`| Vite + Express (web dev, no Electron) |
+| `npm run build`  | Vite build + Electron TS build     |
+| `npm run build:web` | Vite build + server TS build (for web deploy) |
+| `npm run build:server` | Compile server to `dist-server/` |
+| `npm run build:app` | electron-builder (installer)   |
+| `npm start`      | Run packaged Electron app          |
+| `npm run start:web` | Run web server (after `npm run build:web`) |
+| `npm run preview`| Vite preview (web only)            |
+| `npm test`       | Run unit tests                     |
 
 ## License
 

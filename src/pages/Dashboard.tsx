@@ -15,6 +15,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface DashboardStats {
   modbusDevices: number;
@@ -39,11 +40,6 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const loadStats = async () => {
       try {
-        if (!window.electronAPI) {
-          console.error('Electron API not available');
-          return;
-        }
-
         const [
           modbusDevices,
           mqttDevices,
@@ -52,12 +48,12 @@ const Dashboard: React.FC = () => {
           modbusStatus,
           mqttStatus,
         ] = await Promise.all([
-          window.electronAPI.modbus?.devices?.list() || Promise.resolve([]),
-          window.electronAPI.mqtt?.devices?.list() || Promise.resolve([]),
-          window.electronAPI.mappings?.list() || Promise.resolve([]),
-          window.electronAPI.publishers?.list() || Promise.resolve([]),
-          window.electronAPI.modbus?.getStatus() || Promise.resolve({}),
-          window.electronAPI.mqtt?.getStatus() || Promise.resolve({}),
+          api.modbus.devices.list().catch(() => []),
+          api.mqtt.devices.list().catch(() => []),
+          api.mappings.list().catch(() => []),
+          api.publishers.list().catch(() => []),
+          api.modbus.getStatus().catch(() => ({})),
+          api.mqtt.getStatus().catch(() => ({})),
         ]);
 
         const modbusConnections = modbusStatus.connections || {};

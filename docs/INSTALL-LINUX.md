@@ -2,6 +2,8 @@
 
 Use these steps to deploy the app on an **Ubuntu server** by cloning from GitHub.
 
+You can run LT-IDP as a **web application** (recommended on headless servers) or as an **Electron desktop app** (requires a display or Xvfb).
+
 ## 1. Install prerequisites
 
 ```bash
@@ -56,6 +58,31 @@ npm run build
 
 ## 5. Run the app
 
+### Option A: Web application (recommended on servers)
+
+No display needed. The app runs as a web server; you open it in a browser (on the same machine or from another PC).
+
+**Development:**
+
+```bash
+npm run dev:web
+```
+
+Then open http://localhost:3000 (or http://YOUR_SERVER_IP:3000) in a browser.
+
+**Production:**
+
+```bash
+npm run build:web
+npm run start:web
+```
+
+- Server listens on port **3001** by default. Set `PORT=80` to use port 80.
+- Data directory: set `DATA_DIR=/var/lib/lt-idp` (or any path) if you want data outside the project folder.
+- Open http://YOUR_SERVER_IP:3001 in a browser (the server serves the built React app and the API).
+
+### Option B: Electron desktop app
+
 **Development (with Vite dev server):**
 
 ```bash
@@ -75,6 +102,8 @@ npm run build:app
 # Then install: sudo dpkg -i release/*.deb
 # Or run: chmod +x release/*.AppImage && ./release/*.AppImage
 ```
+
+If you see "Missing X server or $DISPLAY", use `xvfb-run npm start` (see section 6).
 
 ## 6. Run as a service (optional)
 

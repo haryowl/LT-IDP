@@ -32,6 +32,7 @@ import {
   Send as SendIcon,
   CloudUpload as CloudUploadIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface SparingConfig {
   id: string;
@@ -98,7 +99,7 @@ const SparingConfig: React.FC = () => {
 
   const loadConfig = async () => {
     try {
-      const data = await window.electronAPI.sparing?.getConfig();
+      const data = await api.sparing?.getConfig();
       if (data) {
         setConfig(data);
       } else {
@@ -121,7 +122,7 @@ const SparingConfig: React.FC = () => {
 
   const loadMappings = async () => {
     try {
-      const data = await window.electronAPI.sparing?.getMappings();
+      const data = await api.sparing?.getMappings();
       setMappings(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load mappings');
@@ -130,7 +131,7 @@ const SparingConfig: React.FC = () => {
 
   const loadAvailableMappings = async () => {
     try {
-      const data = await window.electronAPI.mappings?.list();
+      const data = await api.mappings?.list();
       setAvailableMappings(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load available mappings:', err);
@@ -139,7 +140,7 @@ const SparingConfig: React.FC = () => {
 
   const loadLogs = async () => {
     try {
-      const data = await window.electronAPI.sparing?.getLogs(50);
+      const data = await api.sparing?.getLogs(50);
       setLogs(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load logs:', err);
@@ -148,7 +149,7 @@ const SparingConfig: React.FC = () => {
 
   const loadQueueItems = async () => {
     try {
-      const data = await window.electronAPI.sparing?.getQueueItems(100);
+      const data = await api.sparing?.getQueueItems(100);
       setQueueItems(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load queue items:', err);
@@ -157,7 +158,7 @@ const SparingConfig: React.FC = () => {
 
   const loadStatus = async () => {
     try {
-      const s = await window.electronAPI.sparing?.getStatus();
+      const s = await api.sparing?.getStatus();
       setStatus(s || { enabled: false, sendMode: 'hourly', queueDepth: 0 });
     } catch (err) {
       console.error('Failed to load status:', err);
@@ -170,7 +171,7 @@ const SparingConfig: React.FC = () => {
       setSuccess('');
       setLoading(true);
 
-      const updated = await window.electronAPI.sparing?.updateConfig({
+      const updated = await api.sparing?.updateConfig({
         ...config,
         ...updates,
       });
@@ -196,7 +197,7 @@ const SparingConfig: React.FC = () => {
         return;
       }
 
-      const secret = await window.electronAPI.sparing?.fetchApiSecret();
+      const secret = await api.sparing?.fetchApiSecret();
       await handleUpdateConfig({ apiSecret: secret });
       setSuccess('API Secret fetched successfully');
       setTimeout(() => setSuccess(''), 3000);
@@ -215,7 +216,7 @@ const SparingConfig: React.FC = () => {
         return;
       }
 
-      await window.electronAPI.sparing?.upsertMapping(newSparingParam, newMappingId);
+      await api.sparing?.upsertMapping(newSparingParam, newMappingId);
       await loadMappings();
       setOpenMappingDialog(false);
       setNewSparingParam('');
@@ -231,7 +232,7 @@ const SparingConfig: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this mapping?')) return;
 
     try {
-      await window.electronAPI.sparing?.deleteMapping(id);
+      await api.sparing?.deleteMapping(id);
       await loadMappings();
       setSuccess('Mapping deleted successfully');
       setTimeout(() => setSuccess(''), 3000);
@@ -244,7 +245,7 @@ const SparingConfig: React.FC = () => {
     try {
       setLoading(true);
       setError('');
-      await window.electronAPI.sparing?.processQueue();
+      await api.sparing?.processQueue();
       setSuccess('Queue processed');
       setTimeout(() => setSuccess(''), 3000);
       await loadLogs();
@@ -259,7 +260,7 @@ const SparingConfig: React.FC = () => {
     try {
       setLoading(true);
       setError('');
-      await window.electronAPI.sparing?.sendNow();
+      await api.sparing?.sendNow();
       setSuccess('Data sent successfully');
       setTimeout(() => setSuccess(''), 3000);
       await loadLogs();
@@ -701,7 +702,7 @@ const SparingConfig: React.FC = () => {
             <Typography variant="h6">Queue Items</Typography>
             <Button variant="outlined" onClick={async () => {
               try {
-                await window.electronAPI.sparing?.processQueue();
+                await api.sparing?.processQueue();
                 await loadQueueItems();
                 setSuccess('Queue processed');
                 setTimeout(() => setSuccess(''), 3000);

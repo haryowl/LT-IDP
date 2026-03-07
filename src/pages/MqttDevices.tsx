@@ -28,6 +28,7 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface MqttDevice {
   id: string;
@@ -87,7 +88,7 @@ const MqttDevices: React.FC = () => {
 
   const loadDevices = async () => {
     try {
-      const data = await window.electronAPI.mqtt?.devices?.list();
+      const data = await api.mqtt?.devices?.list();
       setDevices(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load devices');
@@ -96,7 +97,7 @@ const MqttDevices: React.FC = () => {
 
   const loadConnectionStatus = async () => {
     try {
-      const status = await window.electronAPI.mqtt?.getStatus();
+      const status = await api.mqtt?.getStatus();
       const connections = status?.connections || {};
       const statusMap: Record<string, boolean> = {};
       Object.keys(connections).forEach((id) => {
@@ -166,9 +167,9 @@ const MqttDevices: React.FC = () => {
       };
 
       if (editing) {
-        await window.electronAPI.mqtt?.devices?.update(editing.id, deviceData);
+        await api.mqtt?.devices?.update(editing.id, deviceData);
       } else {
-        await window.electronAPI.mqtt?.devices?.create(deviceData);
+        await api.mqtt?.devices?.create(deviceData);
       }
 
       await loadDevices();
@@ -182,7 +183,7 @@ const MqttDevices: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this device?')) return;
 
     try {
-      await window.electronAPI.mqtt?.devices?.delete(id);
+      await api.mqtt?.devices?.delete(id);
       await loadDevices();
     } catch (err: any) {
       setError(err.message || 'Failed to delete device');
@@ -191,7 +192,7 @@ const MqttDevices: React.FC = () => {
 
   const handleConnect = async (id: string) => {
     try {
-      await window.electronAPI.mqtt?.connect(id);
+      await api.mqtt?.connect(id);
       await loadConnectionStatus();
     } catch (err: any) {
       setError(err.message || 'Failed to connect');
@@ -201,7 +202,7 @@ const MqttDevices: React.FC = () => {
   const handleDisconnect = async (id: string) => {
   const handleToggleEnabled = async (device: MqttDevice) => {
     try {
-      await window.electronAPI.mqtt?.devices?.update(device.id, {
+      await api.mqtt?.devices?.update(device.id, {
         ...device,
         enabled: !device.enabled,
       });
@@ -213,7 +214,7 @@ const MqttDevices: React.FC = () => {
 
   const handleAutoStartToggle = async (device: MqttDevice) => {
     try {
-      await window.electronAPI.mqtt?.devices?.update(device.id, {
+      await api.mqtt?.devices?.update(device.id, {
         ...device,
         autoStart: !device.autoStart,
       });
@@ -224,7 +225,7 @@ const MqttDevices: React.FC = () => {
   };
 
     try {
-      await window.electronAPI.mqtt?.disconnect(id);
+      await api.mqtt?.disconnect(id);
       await loadConnectionStatus();
     } catch (err: any) {
       setError(err.message || 'Failed to disconnect');

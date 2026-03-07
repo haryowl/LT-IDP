@@ -2,7 +2,6 @@ import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
-import { app } from 'electron';
 import path from 'path';
 import type {
   User,
@@ -20,10 +19,12 @@ import type {
 export class DatabaseService {
   private db: Database.Database;
   private dbPath: string;
+  private exportDir: string;
   private parameterMappingsSchemaChecked = false;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, exportDir?: string) {
     this.dbPath = dbPath;
+    this.exportDir = exportDir ?? path.join(path.dirname(dbPath), 'exports');
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = OFF'); // Disable foreign keys to avoid migration issues
@@ -1270,7 +1271,8 @@ export class DatabaseService {
     const data = this.queryHistoricalData(startTime, endTime, mappingIds);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const filename = `export_${timestamp}.${format}`;
-    const exportPath = path.join(app.getPath('downloads'), filename);
+    if (!fs.existsSync(this.exportDir)) fs.mkdirSync(this.exportDir, { recursive: true });
+    const exportPath = path.join(this.exportDir, filename);
 
     if (format === 'csv') {
       const mappings = this.getParameterMappings();

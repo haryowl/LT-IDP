@@ -33,6 +33,7 @@ import {
   Terminal as TerminalIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
+import api from '../api/client';
 
 const drawerWidth = 260;
 
@@ -75,9 +76,9 @@ const Layout: React.FC = () => {
 
   const handleLogout = async () => {
     const token = useAuthStore.getState().token;
-    if (token && window.electronAPI?.auth?.logout) {
+    if (token) {
       try {
-        await window.electronAPI.auth.logout(token);
+        await api.auth.logout(token);
       } catch (_) {}
     }
     logout();

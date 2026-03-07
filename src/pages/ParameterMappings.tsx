@@ -26,6 +26,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import api from '../api/client';
 import {
   Add as AddIcon,
   Edit as EditIcon,
@@ -129,7 +130,7 @@ const ParameterMappings: React.FC = () => {
 
   const loadMappings = async () => {
     try {
-      const data = await window.electronAPI.mappings?.list();
+      const data = await api.mappings?.list();
       setMappings(Array.isArray(data) ? data : []);
       const systemMapping = Array.isArray(data)
         ? data.find(
@@ -155,8 +156,8 @@ const ParameterMappings: React.FC = () => {
   const loadDevices = async () => {
     try {
       const [modbus, mqtt] = await Promise.all([
-        window.electronAPI.modbus?.devices?.list() || Promise.resolve([]),
-        window.electronAPI.mqtt?.devices?.list() || Promise.resolve([]),
+        api.modbus?.devices?.list() || Promise.resolve([]),
+        api.mqtt?.devices?.list() || Promise.resolve([]),
       ]);
       setModbusDevices(Array.isArray(modbus) ? modbus : []);
       setMqttDevices(Array.isArray(mqtt) ? mqtt : []);
@@ -167,7 +168,7 @@ const ParameterMappings: React.FC = () => {
 
   const loadRegisters = async (deviceId: string) => {
     try {
-      const registers = await window.electronAPI.modbus?.registers?.list(deviceId);
+      const registers = await api.modbus?.registers?.list(deviceId);
       setModbusRegisters(Array.isArray(registers) ? registers : []);
     } catch (err) {
       console.error('Failed to load registers:', err);
@@ -234,9 +235,9 @@ const ParameterMappings: React.FC = () => {
     try {
       setError('');
       if (editing) {
-        await window.electronAPI.mappings?.update(editing.id, formData);
+        await api.mappings?.update(editing.id, formData);
       } else {
-        await window.electronAPI.mappings?.create(formData);
+        await api.mappings?.create(formData);
       }
       await loadMappings();
       handleClose();
@@ -249,7 +250,7 @@ const ParameterMappings: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this mapping?')) return;
 
     try {
-      await window.electronAPI.mappings?.delete(id);
+      await api.mappings?.delete(id);
       await loadMappings();
     } catch (err: any) {
       setError(err.message || 'Failed to delete mapping');

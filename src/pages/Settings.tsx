@@ -12,6 +12,7 @@ import {
   Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import api from '../api/client';
 import { systemTimestampDefaults } from './ParameterMappings';
 
 interface ParameterMapping {
@@ -71,7 +72,7 @@ const Settings: React.FC = () => {
 
   const loadSettings = async () => {
     try {
-      const id = await window.electronAPI.system?.getClientId();
+      const id = await api.system?.getClientId();
       setClientId(id || '');
     } catch (err: any) {
       setError(err.message || 'Failed to load settings');
@@ -80,7 +81,7 @@ const Settings: React.FC = () => {
 
   const loadTimestampMapping = async () => {
     try {
-      const data = await window.electronAPI.mappings?.list();
+      const data = await api.mappings?.list();
       const mapping = Array.isArray(data)
         ? data.find(
             (m: ParameterMapping) =>
@@ -101,7 +102,7 @@ const Settings: React.FC = () => {
         setTimestampMapping(null);
       }
 
-      const intervalValue = await window.electronAPI.system?.getTimestampInterval();
+      const intervalValue = await api.system?.getTimestampInterval();
       if (typeof intervalValue === 'number') {
         setTimestampInterval(intervalValue);
       }
@@ -119,7 +120,7 @@ const Settings: React.FC = () => {
       setError('');
       setSuccess('');
 
-      await window.electronAPI.system?.setClientId(clientId);
+      await api.system?.setClientId(clientId);
       setSuccess('Settings saved successfully');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
@@ -137,13 +138,13 @@ const Settings: React.FC = () => {
     try {
       setTimestampSaving(true);
       setTimestampMessage(null);
-      await window.electronAPI.mappings?.update(timestampMapping.id, {
+      await api.mappings?.update(timestampMapping.id, {
         inputFormat: timestampForm.inputFormat || null,
         inputTimezone: timestampForm.inputTimezone || null,
         outputFormat: timestampForm.outputFormat || null,
         outputTimezone: timestampForm.outputTimezone || null,
       });
-      await window.electronAPI.system?.setTimestampInterval(timestampInterval);
+      await api.system?.setTimestampInterval(timestampInterval);
       setTimestampMessage({ type: 'success', text: 'System timestamp format updated.' });
       await loadTimestampMapping();
     } catch (error: any) {

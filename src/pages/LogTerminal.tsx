@@ -13,6 +13,7 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
 } from '@mui/icons-material';
+import api from '../api/client';
 
 interface LogEntry {
   id: string;
@@ -30,7 +31,7 @@ const LogTerminal: React.FC = () => {
 
   useEffect(() => {
     if (isRunning) {
-      const unsubscribeModbus = window.electronAPI.on?.('modbus:data', (data: any) => {
+      const unsubscribeModbus = api.on?.('modbus:data', (data: any) => {
         addLog({
           id: `${Date.now()}-${Math.random()}`,
           timestamp: Date.now(),
@@ -40,7 +41,7 @@ const LogTerminal: React.FC = () => {
         });
       });
 
-      const unsubscribeMqtt = window.electronAPI.on?.('mqtt:data', (data: any) => {
+      const unsubscribeMqtt = api.on?.('mqtt:data', (data: any) => {
         addLog({
           id: `${Date.now()}-${Math.random()}`,
           timestamp: Date.now(),
@@ -50,7 +51,7 @@ const LogTerminal: React.FC = () => {
         });
       });
 
-      const unsubscribePublisher = window.electronAPI.on?.('publisher:log', (logData: any) => {
+      const unsubscribePublisher = api.on?.('publisher:log', (logData: any) => {
         addLog({
           id: `${Date.now()}-${Math.random()}`,
           timestamp: Date.now(),

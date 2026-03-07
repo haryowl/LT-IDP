@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { useAuthStore } from './store/authStore';
 import type { UserRole } from './store/authStore';
+import api from './api/client';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -48,18 +49,14 @@ function App() {
   const [authInitialized, setAuthInitialized] = useState(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.electronAPI?.auth?.getStoredSession) {
-      setAuthInitialized(true);
-      return;
-    }
-    window.electronAPI.auth
+    api.auth
       .getStoredSession()
       .then((session) => {
         if (!session?.token) {
           setAuthInitialized(true);
           return;
         }
-        return window.electronAPI.auth.verify(session.token).then((result: any) => {
+        return api.auth.verify(session.token).then((result: any) => {
           if (result?.valid && result?.user) {
             const role = (result.user.role === 'admin' ? 'admin' : 'viewer') as UserRole;
             setFromSession(session.token, session.username, role);

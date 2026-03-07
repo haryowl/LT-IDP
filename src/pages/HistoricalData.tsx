@@ -21,6 +21,7 @@ import {
 // Using native datetime-local input for simplicity
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import SearchIcon from '@mui/icons-material/Search';
+import api from '../api/client';
 
 interface HistoricalDataPoint {
   id: string;
@@ -46,7 +47,7 @@ const HistoricalData: React.FC = () => {
 
   const loadMappings = async () => {
     try {
-      const data = await window.electronAPI.mappings?.list();
+      const data = await api.mappings.list();
       setMappings(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load mappings');
@@ -66,7 +67,7 @@ const HistoricalData: React.FC = () => {
       const startTime = startDate.getTime();
       const endTime = endDate.getTime();
 
-      const result = await window.electronAPI.data?.query({
+      const result = await api.data.query({
         startTime,
         endTime,
         mappingIds: selectedMappings,
