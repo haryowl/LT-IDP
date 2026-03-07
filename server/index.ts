@@ -32,73 +32,19 @@ const dbPath = path.join(DATA_DIR, 'scada.db');
 const exportDir = path.join(DATA_DIR, 'exports');
 const dbService = new DatabaseService(dbPath, exportDir);
 
-const authService = new AuthService(dbService);
-const modbusService = new ModbusService(dbService);
-const mqttSubscriberService = new MqttSubscriberService(dbService);
-const mqttPublisherService = new MqttPublisherService(dbService);
-const mqttBrokerService = new MqttBrokerService(DATA_DIR);
-const httpClientService = new HttpClientService(dbService);
-const dataMapperService = new DataMapperService(dbService);
-const sparingService = new SparingService(dbService);
+// Services created after DB init (see async block below) so that tables exist
+let authService: AuthService;
+let modbusService: ModbusService;
+let mqttSubscriberService: MqttSubscriberService;
+let mqttPublisherService: MqttPublisherService;
+let mqttBrokerService: MqttBrokerService;
+let httpClientService: HttpClientService;
+let dataMapperService: DataMapperService;
+let sparingService: SparingService;
 
-// Wire data flow (same as Electron main)
-modbusService.on('data', (data: any) => {
-  dataMapperService.mapModbusData(data);
-  broadcast({ type: 'modbus:data', data });
-});
-mqttSubscriberService.on('data', (data: any) => {
-  dataMapperService.mapMqttData(data);
-  broadcast({ type: 'mqtt:data', data });
-});
-mqttBrokerService.on('data', (data: any) => {
-  dataMapperService.mapMqttData(data);
-  broadcast({ type: 'mqtt:data', data });
-});
-mqttPublisherService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
-httpClientService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
-dataMapperService.on('dataStored', (data: any) => {
-  const mqttPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'mqtt');
-  mqttPubs.forEach((pub: any) => mqttPublisherService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
-  const httpPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'http');
-  httpPubs.forEach((pub: any) => httpClientService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
-});
-
-// Realtime: when data is mapped, send to WebSocket clients that subscribed
-let realtimeSubscribers: Set<string[]> = new Set();
-dataMapperService.on('dataMapped', (data: any) => {
-  broadcast({ type: 'data:realtime', data });
-});
-
-// Start SPARING scheduler if enabled
-const sparingConfig = sparingService.getSparingConfig();
-if (sparingConfig?.enabled) {
-  sparingService.startHourlyScheduler();
-  logger.info('SPARING scheduler started');
-}
-
-// Auto-start publishers, modbus, mqtt, broker (same as Electron)
-async function autoStart() {
-  const publishers = dbService.getPublishers().filter((p: any) => p.enabled && p.autoStart);
-  for (const pub of publishers) {
-    try {
-      if (pub.type === 'mqtt') await mqttPublisherService.start(pub.id);
-      else await httpClientService.start(pub.id);
-    } catch (e: any) { logger.error('Auto-start publisher', pub.name, e?.message); }
-  }
-  const autoModbus = dbService.getModbusDevices().filter((d: any) => d.enabled && d.autoStart);
-  for (const device of autoModbus) {
-    try { await modbusService.connect(device.id); } catch (e: any) { logger.error('Auto-start Modbus', device.name, e?.message); }
-  }
-  const autoMqtt = dbService.getMqttDevices().filter((d: any) => d.enabled && d.autoStart);
-  for (const device of autoMqtt) {
-    try { await mqttSubscriberService.connect(device.id); } catch (e: any) { logger.error('Auto-start MQTT', device.name, e?.message); }
-  }
-  const brokerConfig = dbService.getMqttBrokerConfig();
-  if (brokerConfig?.autoStart) {
-    try { await mqttBrokerService.start(brokerConfig); } catch (e: any) { logger.error('Auto-start broker', e?.message); }
-  }
-}
-autoStart();
+// WebSocket broadcast (assigned after services created)
+let broadcast: (msg: { type: string; data?: any }) => void = () => {};
+const realtimeSubscribers: Set<string[]> = new Set();
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -394,10 +340,6 @@ const server = http.createServer(app);
 // WebSocket: handle upgrade for /api/ws
 const wss = new WebSocketServer({ noServer: true });
 const wsClients: Set<any> = new Set();
-function broadcast(msg: { type: string; data?: any }) {
-  const payload = JSON.stringify(msg);
-  wsClients.forEach((ws) => { try { if (ws.readyState === 1) ws.send(payload); } catch (_) {} });
-}
 wss.on('connection', (ws) => {
   wsClients.add(ws);
   ws.on('close', () => wsClients.delete(ws));
@@ -412,6 +354,69 @@ server.on('upgrade', (req, socket, head) => {
 
 (async () => {
   await dbService.initialize();
+
+  authService = new AuthService(dbService);
+  modbusService = new ModbusService(dbService);
+  mqttSubscriberService = new MqttSubscriberService(dbService);
+  mqttPublisherService = new MqttPublisherService(dbService);
+  mqttBrokerService = new MqttBrokerService(DATA_DIR);
+  httpClientService = new HttpClientService(dbService);
+  dataMapperService = new DataMapperService(dbService);
+  sparingService = new SparingService(dbService);
+
+  broadcast = (msg: { type: string; data?: any }) => {
+    const payload = JSON.stringify(msg);
+    wsClients.forEach((ws) => { try { if (ws.readyState === 1) ws.send(payload); } catch (_) {} });
+  };
+
+  modbusService.on('data', (data: any) => {
+    dataMapperService.mapModbusData(data);
+    broadcast({ type: 'modbus:data', data });
+  });
+  mqttSubscriberService.on('data', (data: any) => {
+    dataMapperService.mapMqttData(data);
+    broadcast({ type: 'mqtt:data', data });
+  });
+  mqttBrokerService.on('data', (data: any) => {
+    dataMapperService.mapMqttData(data);
+    broadcast({ type: 'mqtt:data', data });
+  });
+  mqttPublisherService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
+  httpClientService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
+  dataMapperService.on('dataStored', (data: any) => {
+    const mqttPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'mqtt');
+    mqttPubs.forEach((pub: any) => mqttPublisherService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
+    const httpPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'http');
+    httpPubs.forEach((pub: any) => httpClientService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
+  });
+  dataMapperService.on('dataMapped', (data: any) => broadcast({ type: 'data:realtime', data }));
+
+  const sparingConfig = sparingService.getSparingConfig();
+  if (sparingConfig?.enabled) {
+    sparingService.startHourlyScheduler();
+    logger.info('SPARING scheduler started');
+  }
+
+  const publishers = dbService.getPublishers().filter((p: any) => p.enabled && p.autoStart);
+  for (const pub of publishers) {
+    try {
+      if (pub.type === 'mqtt') await mqttPublisherService.start(pub.id);
+      else await httpClientService.start(pub.id);
+    } catch (e: any) { logger.error('Auto-start publisher', pub.name, e?.message); }
+  }
+  const autoModbus = dbService.getModbusDevices().filter((d: any) => d.enabled && d.autoStart);
+  for (const device of autoModbus) {
+    try { await modbusService.connect(device.id); } catch (e: any) { logger.error('Auto-start Modbus', device.name, e?.message); }
+  }
+  const autoMqtt = dbService.getMqttDevices().filter((d: any) => d.enabled && d.autoStart);
+  for (const device of autoMqtt) {
+    try { await mqttSubscriberService.connect(device.id); } catch (e: any) { logger.error('Auto-start MQTT', device.name, e?.message); }
+  }
+  const brokerConfig = dbService.getMqttBrokerConfig();
+  if (brokerConfig?.autoStart) {
+    try { await mqttBrokerService.start(brokerConfig); } catch (e: any) { logger.error('Auto-start broker', e?.message); }
+  }
+
   server.listen(PORT, () => {
     logger.info(`LT-IDP web server listening on http://0.0.0.0:${PORT}`);
   });
