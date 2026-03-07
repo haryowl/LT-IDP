@@ -327,6 +327,12 @@ function setupIpcHandlers() {
     return modbusService.getConnectionStatus();
   });
 
+  ipcMain.handle('modbus:listSerialPorts', async () => {
+    const { SerialPort } = await import('serialport');
+    const ports = await SerialPort.list();
+    return ports.map((p: any) => ({ path: p.path, manufacturer: p.manufacturer, serialNumber: p.serialNumber }));
+  });
+
   // MQTT Device Management
   ipcMain.handle('mqtt:devices:list', async () => {
     return dbService.getMqttDevices();

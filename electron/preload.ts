@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     connect: (deviceId: string) => ipcRenderer.invoke('modbus:connect', deviceId),
     disconnect: (deviceId: string) => ipcRenderer.invoke('modbus:disconnect', deviceId),
     getStatus: () => ipcRenderer.invoke('modbus:status'),
+    listSerialPorts: () => ipcRenderer.invoke('modbus:listSerialPorts'),
   },
   // MQTT Device Management
   mqtt: {

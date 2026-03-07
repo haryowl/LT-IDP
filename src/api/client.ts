@@ -146,6 +146,7 @@ export const api = {
     connect: (deviceId: string) => (isElectron ? (window as any).electronAPI.modbus.connect(deviceId) : request('POST', '/modbus/connect', { deviceId })),
     disconnect: (deviceId: string) => (isElectron ? (window as any).electronAPI.modbus.disconnect(deviceId) : request('POST', '/modbus/disconnect', { deviceId })),
     getStatus: () => (isElectron ? (window as any).electronAPI.modbus.getStatus() : request('GET', '/modbus/status')),
+    listSerialPorts: () => (isElectron ? (window as any).electronAPI.modbus.listSerialPorts() : request<{ path: string; manufacturer?: string }[]>('GET', '/serial-ports')),
   },
   mqtt: {
     devices: { list: () => (isElectron ? (window as any).electronAPI.mqtt.devices.list() : request('GET', '/mqtt/devices')), create: (d: any) => (isElectron ? (window as any).electronAPI.mqtt.devices.create(d) : request('POST', '/mqtt/devices', d)), update: (id: string, d: any) => (isElectron ? (window as any).electronAPI.mqtt.devices.update(id, d) : request('PUT', `/mqtt/devices/${id}`, d)), delete: (id: string) => (isElectron ? (window as any).electronAPI.mqtt.devices.delete(id) : request('DELETE', `/mqtt/devices/${id}`)) },

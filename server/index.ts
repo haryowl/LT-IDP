@@ -18,6 +18,7 @@ import { HttpClientService } from '../electron/services/httpClient';
 import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
 import { getLogger } from '../electron/services/logger';
+import { SerialPort } from 'serialport';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
@@ -145,6 +146,14 @@ app.post('/api/modbus/disconnect', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/modbus/status', authMiddleware, (req, res) => res.json(modbusService.getConnectionStatus()));
+app.get('/api/serial-ports', authMiddleware, (req, res) => {
+  SerialPort.list()
+    .then((ports) => res.json(ports.map((p: any) => ({ path: p.path, manufacturer: p.manufacturer, serialNumber: p.serialNumber }))))
+    .catch((err: any) => {
+      logger.error('List serial ports', err?.message);
+      res.status(500).json({ error: err?.message || 'Failed to list serial ports' });
+    });
+});
 
 // ---------- MQTT ----------
 app.get('/api/mqtt/devices', authMiddleware, (req, res) => res.json(dbService.getMqttDevices()));

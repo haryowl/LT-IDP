@@ -119,6 +119,9 @@ const ModbusDevices: React.FC = () => {
     retryAttempts: 3,
   });
 
+  const [serialPorts, setSerialPorts] = useState<{ path: string; manufacturer?: string }[]>([]);
+  const [serialPortsLoading, setSerialPortsLoading] = useState(false);
+
   useEffect(() => {
     loadDevices();
     loadConnectionStatus();
@@ -178,6 +181,23 @@ const ModbusDevices: React.FC = () => {
       console.error('Failed to load connection status:', err);
     }
   };
+
+  const loadSerialPorts = async () => {
+    setSerialPortsLoading(true);
+    try {
+      const list = await api.modbus?.listSerialPorts?.();
+      setSerialPorts(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.error('Failed to list serial ports:', err);
+      setSerialPorts([]);
+    } finally {
+      setSerialPortsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && formData.type === 'rtu') loadSerialPorts();
+  }, [open, formData.type]);
 
   const loadDeviceRegisters = async (deviceId: string) => {
     try {
@@ -603,9 +623,11 @@ const ModbusDevices: React.FC = () => {
               label="Type"
               select
               value={formData.type}
-              onChange={(e) =>
-                setFormData({ ...formData, type: e.target.value as 'tcp' | 'rtu' })
-              }
+              onChange={(e) => {
+                const newType = e.target.value as 'tcp' | 'rtu';
+                setFormData({ ...formData, type: newType });
+                if (newType === 'rtu') loadSerialPorts();
+              }}
               fullWidth
             >
               <MenuItem value="tcp">TCP/IP</MenuItem>
@@ -633,15 +655,52 @@ const ModbusDevices: React.FC = () => {
               </>
             ) : (
               <>
-                <TextField
-                  label="Serial Port"
-                  value={formData.serialPort}
-                  onChange={(e) =>
-                    setFormData({ ...formData, serialPort: e.target.value })
-                  }
-                  fullWidth
-                  required
-                />
+                {serialPortsLoading ? (
+                  <TextField label="Serial Port" value="" fullWidth disabled placeholder="Loading ports..." />
+                ) : serialPorts.length > 0 ? (
+                  <Box>
+                    <TextField
+                      label="Serial Port"
+                      select
+                      value={serialPorts.some((p) => p.path === formData.serialPort) ? formData.serialPort : '__custom__'}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFormData({ ...formData, serialPort: v === '__custom__' ? formData.serialPort : v });
+                      }}
+                      fullWidth
+                      required
+                    >
+                      {serialPorts.map((p) => (
+                        <MenuItem key={p.path} value={p.path}>
+                          {p.path}
+                          {p.manufacturer ? ` (${p.manufacturer})` : ''}
+                        </MenuItem>
+                      ))}
+                      <MenuItem value="__custom__">Enter path manually</MenuItem>
+                    </TextField>
+                    {(formData.serialPort === '' || !serialPorts.some((p) => p.path === formData.serialPort)) && (
+                      <TextField
+                        label="Custom serial path"
+                        value={formData.serialPort}
+                        onChange={(e) => setFormData({ ...formData, serialPort: e.target.value })}
+                        placeholder="e.g. /dev/ttyUSB0 or COM1"
+                        fullWidth
+                        sx={{ mt: 1 }}
+                      />
+                    )}
+                  </Box>
+                ) : (
+                  <TextField
+                    label="Serial Port"
+                    value={formData.serialPort}
+                    onChange={(e) =>
+                      setFormData({ ...formData, serialPort: e.target.value })
+                    }
+                    placeholder="e.g. /dev/ttyUSB0 (Linux), COM1 (Windows)"
+                    fullWidth
+                    required
+                  />
+                )}
                 <TextField
                   label="Baud Rate"
                   type="number"
