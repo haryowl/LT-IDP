@@ -38,8 +38,9 @@ export class ModbusService extends EventEmitter {
       throw new Error(`Device ${device.name} is disabled`);
     }
 
+    // If already in map, force reconnect so UI can recover from stale/dead connection
     if (this.connections.has(deviceId)) {
-      throw new Error(`Device ${device.name} is already connected`);
+      await this.disconnect(deviceId);
     }
 
     const client = new ModbusRTU();
