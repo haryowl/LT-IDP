@@ -146,7 +146,7 @@ app.post('/api/modbus/connect', authMiddleware, (req, res) => {
   modbusService
     .connect(deviceId)
     .then(() => res.json({ ok: true }))
-    .catch((e: any) => res.status(400).json({ error: e?.message ?? (typeof e === 'string' ? e : String(e)) || 'Connection failed' }));
+    .catch((e: any) => res.status(400).json({ error: (e?.message ?? (typeof e === 'string' ? e : String(e))) || 'Connection failed' }));
 });
 app.post('/api/modbus/disconnect', authMiddleware, (req, res) => {
   modbusService.disconnect(req.body?.deviceId);
