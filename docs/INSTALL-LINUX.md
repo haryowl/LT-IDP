@@ -4,6 +4,43 @@ Use these steps to deploy the app on an **Ubuntu server** by cloning from GitHub
 
 You can run LT-IDP as a **web application** (recommended on headless servers) or as an **Electron desktop app** (requires a display or Xvfb).
 
+---
+
+## Quick deploy (one script)
+
+On a fresh Ubuntu server, run:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/haryowl/LT-IDP/main/scripts/deploy-linux.sh | bash
+```
+
+Or clone first and run locally:
+
+```bash
+git clone https://github.com/haryowl/LT-IDP.git
+cd LT-IDP
+chmod +x scripts/deploy-linux.sh
+./scripts/deploy-linux.sh
+```
+
+**Options (environment variables):**
+
+- `INSTALL_DIR` – where to install (default: `/opt/lt-idp`)
+- `DATA_DIR` – where to store data (default: `$HOME/lt-idp-data`)
+- `PORT` – HTTP port (default: `3001`)
+
+Example:
+
+```bash
+DATA_DIR=/var/lib/lt-idp PORT=80 sudo -E ./scripts/deploy-linux.sh
+```
+
+After deployment, open `http://YOUR_SERVER_IP:3001` in a browser.
+
+---
+
+## Manual install
+
 ## 1. Install prerequisites
 
 ```bash
