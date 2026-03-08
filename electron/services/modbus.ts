@@ -162,8 +162,9 @@ export class ModbusService extends EventEmitter {
 
     const onCloseOrError = (connection as any)._onCloseOrError;
     if (onCloseOrError) {
-      connection.client.removeListener?.('close', onCloseOrError);
-      connection.client.removeListener?.('error', onCloseOrError);
+      const client = connection.client as unknown as EventEmitter;
+      client.removeListener('close', onCloseOrError);
+      client.removeListener('error', onCloseOrError);
     }
 
     if (connection.pollTimer) {
