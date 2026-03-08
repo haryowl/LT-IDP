@@ -93,9 +93,12 @@ export class ModbusService extends EventEmitter {
       }
 
       if (registers.length === 0) {
+        const hint =
+          type === 'rtu'
+            ? ' Check serial port path (e.g. /dev/ttyUSB0), baud rate, Slave ID, and that the device is powered and connected. On Linux you may need: sudo usermod -aG dialout $USER'
+            : ' Check host, port, and Slave ID.';
         throw new Error(
-          `No registers could be detected automatically for device ${device.name}. ` +
-            `Please configure Modbus registers before connecting.`
+          `No registers could be detected for device ${device.name}.${hint} You can add registers manually in the device settings.`
         );
       }
 
@@ -123,12 +126,20 @@ export class ModbusService extends EventEmitter {
       this.emit('connected', deviceId);
     } catch (error: any) {
       console.error(`Connection error for ${device.name}:`, error);
+      let message = error?.message ?? String(error);
+      const type = (device.type || '').toString().toLowerCase();
+      if (type === 'rtu' && message) {
+        if (message.includes('Permission denied') || message.includes('EACCES'))
+          message = `Serial port access denied for ${device.serialPort}. On Linux, add your user to the dialout group: sudo usermod -aG dialout $USER (then log out and back in).`;
+        else if (message.includes('ENOENT') || message.includes('No such file'))
+          message = `Serial port not found: ${device.serialPort}. Check the port path (e.g. /dev/ttyUSB0) and that the device is connected.`;
+      }
       const status = {
         deviceId: device.id,
         deviceName: device.name,
         type: 'modbus' as const,
         connected: false,
-        lastError: error.message,
+        lastError: message,
       };
 
       if (this.connections.has(deviceId)) {
@@ -136,7 +147,7 @@ export class ModbusService extends EventEmitter {
       }
 
       this.emit('error', deviceId, error);
-      throw error;
+      throw new Error(message);
     }
   }
 

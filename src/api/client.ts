@@ -36,7 +36,15 @@ async function request<T = any>(method: string, path: string, body?: any): Promi
   });
   const text = await res.text();
   if (!res.ok) {
-    const err = new Error(JSON.parse(text)?.error || text || res.statusText);
+    let msg = res.statusText;
+    try {
+      const body = text ? JSON.parse(text) : null;
+      if (body && typeof body.error === 'string') msg = body.error;
+      else if (text) msg = text;
+    } catch (_) {
+      if (text) msg = text;
+    }
+    const err = new Error(msg);
     (err as any).status = res.status;
     throw err;
   }

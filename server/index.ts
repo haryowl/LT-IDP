@@ -139,7 +139,14 @@ app.delete('/api/modbus/registers/:id', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/modbus/connect', authMiddleware, (req, res) => {
-  modbusService.connect(req.body?.deviceId).then(() => res.json({ ok: true })).catch((e) => res.status(400).json({ error: e?.message }));
+  const deviceId = req.body?.deviceId;
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Missing device ID' });
+  }
+  modbusService
+    .connect(deviceId)
+    .then(() => res.json({ ok: true }))
+    .catch((e: any) => res.status(400).json({ error: e?.message ?? (typeof e === 'string' ? e : String(e)) || 'Connection failed' }));
 });
 app.post('/api/modbus/disconnect', authMiddleware, (req, res) => {
   modbusService.disconnect(req.body?.deviceId);
