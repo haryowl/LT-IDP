@@ -428,6 +428,10 @@ function setupIpcHandlers() {
     return mqttBrokerService.isMosquittoInstalled();
   });
 
+  ipcMain.handle('mqtt:discovered', async () => {
+    return mqttBrokerService.getDiscoveredTopics();
+  });
+
   // Parameter Mapping
   ipcMain.handle('mappings:list', async () => {
     return dbService.getParameterMappings();

@@ -12,6 +12,8 @@ interface BrokerStatus {
   uptime?: number;
 }
 
+const MAX_DISCOVERED_TOPICS = 200;
+
 export class MqttBrokerService extends EventEmitter {
   private brokerProcess: ChildProcess | null = null;
   private config: MqttBrokerConfig | null = null;
@@ -20,6 +22,8 @@ export class MqttBrokerService extends EventEmitter {
   private internalClient: MqttClient | null = null;
   private configDir: string;
   private dataDir: string;
+  /** Auto-discovery: topics that received messages on the local broker (topic -> { lastSeen, lastValue }) */
+  private discoveredTopics = new Map<string, { lastSeen: number; lastValue?: unknown }>();
 
   constructor(userDataPath?: string) {
     super();
@@ -445,6 +449,13 @@ export class MqttBrokerService extends EventEmitter {
 
           console.log(`Broker received message on topic "${topic}":`, payload);
 
+          // Auto-discovery: record topic (cap size by removing oldest if needed)
+          if (this.discoveredTopics.size >= MAX_DISCOVERED_TOPICS && !this.discoveredTopics.has(topic)) {
+            const oldest = [...this.discoveredTopics.entries()].sort((a, b) => a[1].lastSeen - b[1].lastSeen)[0];
+            if (oldest) this.discoveredTopics.delete(oldest[0]);
+          }
+          this.discoveredTopics.set(topic, { lastSeen: Date.now(), lastValue: data });
+
           this.emit('data', {
             deviceId: 'local-broker-virtual',
             topic,
@@ -520,6 +531,13 @@ export class MqttBrokerService extends EventEmitter {
       this.status.uptime = Date.now() - this.startTime;
     }
     return { ...this.status };
+  }
+
+  /** Topics that have received messages on the local broker (auto-discovery). Sorted by lastSeen descending. */
+  getDiscoveredTopics(): { topic: string; lastSeen: number; lastValue?: unknown }[] {
+    return [...this.discoveredTopics.entries()]
+      .map(([topic, meta]) => ({ topic, lastSeen: meta.lastSeen, lastValue: meta.lastValue }))
+      .sort((a, b) => b.lastSeen - a.lastSeen);
   }
 
   async isMosquittoInstalled(): Promise<boolean> {

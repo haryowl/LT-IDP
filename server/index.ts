@@ -217,6 +217,7 @@ app.post('/api/mqtt/broker/stop', authMiddleware, async (req, res) => {
 });
 app.get('/api/mqtt/broker/status', authMiddleware, (req, res) => res.json(mqttBrokerService.getStatus()));
 app.get('/api/mqtt/broker/check-installed', authMiddleware, (req, res) => res.json(mqttBrokerService.isMosquittoInstalled()));
+app.get('/api/mqtt/discovered', authMiddleware, (req, res) => res.json(mqttBrokerService.getDiscoveredTopics()));
 
 // ---------- Mappings ----------
 app.get('/api/mappings', authMiddleware, (req, res) => res.json(dbService.getParameterMappings()));

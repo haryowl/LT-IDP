@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     connect: (deviceId: string) => ipcRenderer.invoke('mqtt:connect', deviceId),
     disconnect: (deviceId: string) => ipcRenderer.invoke('mqtt:disconnect', deviceId),
     getStatus: () => ipcRenderer.invoke('mqtt:status'),
+    getDiscoveredTopics: () => ipcRenderer.invoke('mqtt:discovered'),
   },
   // Parameter Mapping
   mappings: {

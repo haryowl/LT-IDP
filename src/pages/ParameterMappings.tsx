@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Autocomplete,
@@ -58,6 +59,8 @@ interface ParameterMapping {
 }
 
 const ParameterMappings: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [mappings, setMappings] = useState<ParameterMapping[]>([]);
   const [modbusDevices, setModbusDevices] = useState<any[]>([]);
   const [mqttDevices, setMqttDevices] = useState<any[]>([]);
@@ -127,6 +130,24 @@ const ParameterMappings: React.FC = () => {
       loadRegisters(formData.sourceDeviceId);
     }
   }, [formData.sourceDeviceId, formData.sourceType]);
+
+  // Pre-fill form when navigating from MQTT Discovered topics (Create mapping)
+  useEffect(() => {
+    const state = location.state as { suggestedTopic?: string; suggestedSourceDeviceId?: string } | null;
+    if (state?.suggestedTopic && state?.suggestedSourceDeviceId) {
+      setEditing(null);
+      setFormData((prev) => ({
+        ...prev,
+        sourceType: 'mqtt',
+        sourceDeviceId: state.suggestedSourceDeviceId,
+        topic: state.suggestedTopic,
+        name: prev.name || state.suggestedTopic.replace(/\//g, '_').slice(0, 40) || 'mqtt_mapping',
+      }));
+      setOpen(true);
+      setError('');
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   const loadMappings = async () => {
     try {

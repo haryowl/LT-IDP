@@ -27,8 +27,16 @@ import {
   Delete as DeleteIcon,
   PlayArrow as PlayIcon,
   Stop as StopIcon,
+  Link as LinkIcon,
 } from '@mui/icons-material';
+import { Link } from 'react-router-dom';
 import api from '../api/client';
+
+interface DiscoveredTopic {
+  topic: string;
+  lastSeen: number;
+  lastValue?: unknown;
+}
 
 interface MqttDevice {
   id: string;
@@ -60,6 +68,8 @@ const MqttDevices: React.FC = () => {
   const [editing, setEditing] = useState<MqttDevice | null>(null);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<Record<string, boolean>>({});
+  const [discoveredTopics, setDiscoveredTopics] = useState<DiscoveredTopic[]>([]);
+  const [brokerRunning, setBrokerRunning] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -79,10 +89,34 @@ const MqttDevices: React.FC = () => {
     reconnectPeriod: 5000,
   });
 
+  const loadDiscovered = async () => {
+    try {
+      const list = await api.mqtt?.getDiscoveredTopics?.();
+      setDiscoveredTopics(Array.isArray(list) ? list : []);
+    } catch (_) {
+      setDiscoveredTopics([]);
+    }
+  };
+
+  const loadBrokerStatus = async () => {
+    try {
+      const st = await api.mqtt?.broker?.getStatus?.();
+      setBrokerRunning(!!st?.running);
+    } catch (_) {
+      setBrokerRunning(false);
+    }
+  };
+
   useEffect(() => {
     loadDevices();
     loadConnectionStatus();
-    const interval = setInterval(loadConnectionStatus, 3000);
+    loadBrokerStatus();
+    loadDiscovered();
+    const interval = setInterval(() => {
+      loadConnectionStatus();
+      loadBrokerStatus();
+      loadDiscovered();
+    }, 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -199,7 +233,6 @@ const MqttDevices: React.FC = () => {
     }
   };
 
-  const handleDisconnect = async (id: string) => {
   const handleToggleEnabled = async (device: MqttDevice) => {
     try {
       await api.mqtt?.devices?.update(device.id, {
@@ -224,6 +257,7 @@ const MqttDevices: React.FC = () => {
     }
   };
 
+  const handleDisconnect = async (id: string) => {
     try {
       await api.mqtt?.disconnect(id);
       await loadConnectionStatus();
@@ -340,6 +374,74 @@ const MqttDevices: React.FC = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Auto-discovered topics (local broker) */}
+      <Box sx={{ mt: 4 }}>
+        <Typography variant="h6" sx={{ mb: 1 }}>
+          Discovered topics (local broker)
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          When the local MQTT broker is running, topics that receive messages appear here. Use Parameter Mappings with
+          source device &quot;Local MQTT Broker (Internal)&quot; and the topic below to store data.
+        </Typography>
+        {!brokerRunning && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Local broker is not running. Start it from MQTT Broker to discover topics.
+          </Alert>
+        )}
+        {brokerRunning && (
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Topic</TableCell>
+                  <TableCell>Last seen</TableCell>
+                  <TableCell align="right">Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {discoveredTopics.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} align="center">
+                      No topics yet. Publish to the local broker to see them here.
+                    </TableCell>
+                  </TableRow>
+                )}
+                {discoveredTopics.slice(0, 50).map((row) => (
+                  <TableRow key={row.topic}>
+                    <TableCell>
+                      <Typography variant="body2" fontFamily="monospace">
+                        {row.topic}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {row.lastSeen ? new Date(row.lastSeen).toLocaleString() : '-'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        component={Link}
+                        to="/mappings"
+                        size="small"
+                        startIcon={<LinkIcon />}
+                        state={{ suggestedTopic: row.topic, suggestedSourceDeviceId: 'local-broker-virtual' }}
+                      >
+                        Create mapping
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+        {brokerRunning && discoveredTopics.length > 50 && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Showing first 50 of {discoveredTopics.length} topics.
+          </Typography>
+        )}
+      </Box>
 
       <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
         <DialogTitle>{editing ? 'Edit Device' : 'Add MQTT Device'}</DialogTitle>

@@ -162,6 +162,7 @@ export const api = {
     connect: (deviceId: string) => (isElectron ? (window as any).electronAPI.mqtt.connect(deviceId) : request('POST', '/mqtt/connect', { deviceId })),
     disconnect: (deviceId: string) => (isElectron ? (window as any).electronAPI.mqtt.disconnect(deviceId) : request('POST', '/mqtt/disconnect', { deviceId })),
     getStatus: () => (isElectron ? (window as any).electronAPI.mqtt.getStatus() : request('GET', '/mqtt/status')),
+    getDiscoveredTopics: () => (isElectron ? (window as any).electronAPI.mqtt.getDiscoveredTopics() : request<{ topic: string; lastSeen: number; lastValue?: unknown }[]>('GET', '/mqtt/discovered')),
   },
   mappings: { list: () => (isElectron ? (window as any).electronAPI.mappings.list() : request('GET', '/mappings')), create: (m: any) => (isElectron ? (window as any).electronAPI.mappings.create(m) : request('POST', '/mappings', m)), update: (id: string, m: any) => (isElectron ? (window as any).electronAPI.mappings.update(id, m) : request('PUT', `/mappings/${id}`, m)), delete: (id: string) => (isElectron ? (window as any).electronAPI.mappings.delete(id) : request('DELETE', `/mappings/${id}`)) },
   data: {
