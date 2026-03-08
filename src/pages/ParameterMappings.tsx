@@ -90,6 +90,7 @@ const ParameterMappings: React.FC = () => {
   });
   
   const [showTransformHelp, setShowTransformHelp] = useState(false);
+  const [showJsonPathHelp, setShowJsonPathHelp] = useState(false);
   const systemSources = useMemo(
     () => [
       { id: 'system-timestamp', label: 'System Timestamp' },
@@ -445,13 +446,43 @@ const ParameterMappings: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
                   fullWidth
                 />
-                <TextField
-                  label="JSON Path"
-                  value={formData.jsonPath}
-                  onChange={(e) => setFormData({ ...formData, jsonPath: e.target.value })}
-                  fullWidth
-                  placeholder="$.value or data.temperature"
-                />
+                <Box>
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    <TextField
+                      label="JSON Path"
+                      value={formData.jsonPath}
+                      onChange={(e) => setFormData({ ...formData, jsonPath: e.target.value })}
+                      fullWidth
+                      placeholder="e.g. value, data.temperature"
+                      helperText="Leave empty to use the full message as value. Use dot notation to extract nested fields."
+                    />
+                    <IconButton
+                      onClick={() => setShowJsonPathHelp(!showJsonPathHelp)}
+                      size="small"
+                      aria-label="JSON Path help"
+                    >
+                      <HelpIcon />
+                    </IconButton>
+                  </Box>
+                  <Collapse in={showJsonPathHelp}>
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      <Typography variant="body2" gutterBottom>
+                        <strong>JSON Path (dot notation) examples:</strong>
+                      </Typography>
+                      <Typography variant="body2" component="div">
+                        <ul style={{ margin: 0, paddingLeft: 20 }}>
+                          <li><strong>Root field:</strong> <code>value</code> for <code>{"{ \"value\": 42 }"}</code></li>
+                          <li><strong>Nested:</strong> <code>data.temperature</code> for <code>{"{ \"data\": { \"temperature\": 25.5 } }"}</code></li>
+                          <li><strong>Deep:</strong> <code>sensors.temp</code> for <code>{"{ \"sensors\": { \"temp\": 22 } }"}</code></li>
+                          <li><strong>Leave empty</strong> if the MQTT payload is a plain number or string</li>
+                        </ul>
+                      </Typography>
+                      <Typography variant="body2" sx={{ mt: 1 }}>
+                        Use dot-separated keys to navigate nested JSON. Arrays are not supported; use a nested object key.
+                      </Typography>
+                    </Alert>
+                  </Collapse>
+                </Box>
               </>
             )}
 
