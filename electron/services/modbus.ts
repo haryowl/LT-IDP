@@ -4,11 +4,11 @@ import type { DatabaseService } from './database';
 import type { ModbusDevice, ModbusRegister } from '../types';
 
 /** If no successful poll for this long (ms), force reconnect. */
-const BAD_CONNECTION_THRESHOLD_MS = 20_000;
+const BAD_CONNECTION_THRESHOLD_MS = 10_000;
 /** Delay before first reconnect attempt after failure (ms). */
-const RECONNECT_DELAY_MS = 5_000;
-/** Delay before retry when reconnect attempt fails (ms). */
-const RECONNECT_RETRY_DELAY_MS = 10_000;
+const RECONNECT_DELAY_MS = 3_000;
+/** Delay before retry when reconnect attempt fails (ms). Keeps retrying when device powered off. */
+const RECONNECT_RETRY_DELAY_MS = 5_000;
 
 interface ModbusConnection {
   device: ModbusDevice;
@@ -18,6 +18,8 @@ interface ModbusConnection {
   recordTimer?: NodeJS.Timeout;
   /** Timestamp of last poll that had at least one successful register read. */
   lastSuccessfulPollTime?: number;
+  /** Prevents multiple simultaneous reconnect attempts. */
+  reconnecting?: boolean;
   status: {
     deviceId: string;
     deviceName: string;
@@ -114,6 +116,7 @@ export class ModbusService extends EventEmitter {
       };
 
       this.connections.set(deviceId, connection);
+      this.attachSocketListeners(deviceId);
       this.startPolling(deviceId);
       this.startRecording(deviceId);
       console.log(`Device ${device.name} connected successfully, starting polling...`);
@@ -137,10 +140,30 @@ export class ModbusService extends EventEmitter {
     }
   }
 
+  private attachSocketListeners(deviceId: string): void {
+    const connection = this.connections.get(deviceId);
+    if (!connection) return;
+    const onCloseOrError = () => {
+      if (connection.reconnecting) return;
+      connection.reconnecting = true;
+      console.log(`Modbus device ${connection.device.name}: connection lost (close/error), reconnecting...`);
+      this.reconnect(deviceId);
+    };
+    connection.client.on('close', onCloseOrError);
+    connection.client.on('error', onCloseOrError);
+    (connection as any)._onCloseOrError = onCloseOrError;
+  }
+
   async disconnect(deviceId: string): Promise<void> {
     const connection = this.connections.get(deviceId);
     if (!connection) {
       return;
+    }
+
+    const onCloseOrError = (connection as any)._onCloseOrError;
+    if (onCloseOrError) {
+      connection.client.removeListener?.('close', onCloseOrError);
+      connection.client.removeListener?.('error', onCloseOrError);
     }
 
     if (connection.pollTimer) {
@@ -151,7 +174,7 @@ export class ModbusService extends EventEmitter {
     }
 
     try {
-      if (connection.client.isOpen) {
+      if (connection.client?.isOpen) {
         connection.client.close(() => {});
       }
     } catch (error: any) {
@@ -555,12 +578,13 @@ export class ModbusService extends EventEmitter {
     if (!connection) {
       return;
     }
+    connection.reconnecting = true;
 
     await this.disconnect(deviceId);
     this.scheduleReconnect(deviceId, RECONNECT_DELAY_MS);
   }
 
-  /** Schedule a reconnect attempt; on failure, reschedule after RECONNECT_RETRY_DELAY_MS. */
+  /** Schedule a reconnect attempt; on failure, reschedule. Keeps retrying until device comes back. */
   private scheduleReconnect(deviceId: string, delayMs: number): void {
     setTimeout(async () => {
       const device = this.db.getModbusDeviceById(deviceId);
@@ -571,7 +595,10 @@ export class ModbusService extends EventEmitter {
         await this.connect(deviceId);
         console.log(`Modbus device ${device.name} reconnected successfully.`);
       } catch (error: any) {
-        console.error(`Reconnection failed for device ${deviceId}, retrying in ${RECONNECT_RETRY_DELAY_MS / 1000}s:`, error?.message);
+        console.error(
+          `Modbus device ${device.name} reconnection failed, retrying in ${RECONNECT_RETRY_DELAY_MS / 1000}s (device may be powered off):`,
+          error?.message
+        );
         this.scheduleReconnect(deviceId, RECONNECT_RETRY_DELAY_MS);
       }
     }, delayMs);
