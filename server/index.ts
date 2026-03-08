@@ -29,6 +29,17 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const logger = getLogger(DATA_DIR);
 logger.info('Server starting. DATA_DIR:', DATA_DIR);
 
+function errMsg(e: any): string {
+  if (e == null) return 'Unknown error';
+  if (typeof e === 'string') return e;
+  if (typeof e?.message === 'string') return e.message;
+  return String(e);
+}
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled promise rejection:', errMsg(reason));
+});
+
 const dbPath = path.join(DATA_DIR, 'scada.db');
 const exportDir = path.join(DATA_DIR, 'exports');
 const dbService = new DatabaseService(dbPath, exportDir);
@@ -422,7 +433,11 @@ server.on('upgrade', (req, socket, head) => {
   }
   const autoModbus = dbService.getModbusDevices().filter((d: any) => d.enabled && d.autoStart);
   for (const device of autoModbus) {
-    try { await modbusService.connect(device.id); } catch (e: any) { logger.error('Auto-start Modbus', device.name, e?.message); }
+    try {
+      await modbusService.connect(device.id);
+    } catch (e: any) {
+      logger.error('Auto-start Modbus', device.name, 'failed:', errMsg(e));
+    }
   }
   const autoMqtt = dbService.getMqttDevices().filter((d: any) => d.enabled && d.autoStart);
   for (const device of autoMqtt) {
