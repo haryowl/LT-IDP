@@ -426,7 +426,7 @@ server.on('upgrade', (req, socket, head) => {
     try { await mqttBrokerService.start(brokerConfig); } catch (e: any) { logger.error('Auto-start broker', e?.message); }
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     logger.info(`LT-IDP web server listening on http://0.0.0.0:${PORT}`);
   });
 })();
