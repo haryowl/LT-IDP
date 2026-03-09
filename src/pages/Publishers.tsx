@@ -638,7 +638,7 @@ const Publishers: React.FC = () => {
     timestamp: item.timestamp
   }))
 })`}
-                helperText="Provide either a JSON template with placeholders ({clientId}, {mappingName}, {value}, {unit}, {timestamp}, {quality}, {parameterId}) or a JavaScript expression that returns an object or string. Available variables: clientId, mappingId, mappingName, parameterId, value, unit, quality, timestamp, data, batch, publisher, Math, Date, JSON."
+                helperText="JavaScript expression that returns an object or string. Use clientId (not clientld). For dynamic keys use computed property: [item.mappingName]: item.value. Placeholders also supported: {clientId}, {mappingName}, {value}, etc. Variables: clientId, mappingId, mappingName, parameterId, value, unit, quality, timestamp, data, batch, publisher, Math, Date, JSON."
                 sx={{ mb: 2 }}
               />
             )}
@@ -661,15 +661,14 @@ const Publishers: React.FC = () => {
   device: clientId,
   endpoint: publisher.httpUrl || publisher.mqttTopic,
   payload: batch.map(item => ({
-    id: item.mappingId,
-    name: item.mappingName,
-    value: item.value,
-    quality: item.quality,
-    timestamp: item.timestamp
+    [item.mappingName]: item.value
   }))
 })`}
                 </Box>
-                <Typography variant="body2" color="textSecondary">
+                <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
+                  For dynamic keys (mapping name as key) use brackets: [item.mappingName]: item.value. Use clientId (not clientld).
+                </Typography>
+                <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
                   You can return any JSON-serialisable structure. The template executes with <code>{'{clientId}'}</code>, <code>{'{mappingId}'}</code>, <code>{'{mappingName}'}</code>, <code>{'{parameterId}'}</code>, <code>{'{value}'}</code>, <code>{'{unit}'}</code>, <code>{'{timestamp}'}</code>, <code>{'{quality}'}</code>, plus objects <code>data</code> (current sample), <code>batch</code> (all buffered samples), <code>publisher</code>, <code>Math</code>, <code>Date</code> and <code>JSON</code>. Legacy placeholder replacement remains available for simpler use cases.
                 </Typography>
               </Box>
