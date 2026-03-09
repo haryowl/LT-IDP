@@ -281,6 +281,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('modbus:devices:delete', async (_, id) => {
+    await modbusService.disconnect(id);
     return dbService.deleteModbusDevice(id);
   });
 
@@ -347,6 +348,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('mqtt:devices:delete', async (_, id) => {
+    await mqttSubscriberService.disconnect(id);
     return dbService.deleteMqttDevice(id);
   });
 

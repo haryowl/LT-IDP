@@ -125,8 +125,10 @@ app.put('/api/modbus/devices/:id', authMiddleware, (req, res) => {
   dbService.updateModbusDevice(req.params.id, req.body);
   res.json({ ok: true });
 });
-app.delete('/api/modbus/devices/:id', authMiddleware, (req, res) => {
-  dbService.deleteModbusDevice(req.params.id);
+app.delete('/api/modbus/devices/:id', authMiddleware, async (req, res) => {
+  const id = req.params.id;
+  await modbusService.disconnect(id).catch(() => {});
+  dbService.deleteModbusDevice(id);
   res.json({ ok: true });
 });
 app.get('/api/modbus/registers', authMiddleware, (req, res) => res.json(dbService.getModbusRegisters(req.query.deviceId as string)));
@@ -180,8 +182,10 @@ app.put('/api/mqtt/devices/:id', authMiddleware, (req, res) => {
   dbService.updateMqttDevice(req.params.id, req.body);
   res.json({ ok: true });
 });
-app.delete('/api/mqtt/devices/:id', authMiddleware, (req, res) => {
-  dbService.deleteMqttDevice(req.params.id);
+app.delete('/api/mqtt/devices/:id', authMiddleware, async (req, res) => {
+  const id = req.params.id;
+  await mqttSubscriberService.disconnect(id).catch(() => {});
+  dbService.deleteMqttDevice(id);
   res.json({ ok: true });
 });
 app.post('/api/mqtt/connect', authMiddleware, (req, res) => {
