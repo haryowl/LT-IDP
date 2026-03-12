@@ -131,6 +131,56 @@ export interface Publisher {
   updatedAt: number;
 }
 
+export interface ThresholdWatchItem {
+  mappingId: string;
+  min?: number;
+  max?: number;
+}
+
+export interface ThresholdSnapshotItem {
+  mappingId: string;
+  mappingName: string;
+  parameterId?: string;
+  value: any;
+  unit?: string;
+  quality: 'good' | 'bad' | 'uncertain';
+  timestamp: number;
+}
+
+export interface ThresholdTriggerContext {
+  mappingId: string;
+  mappingName: string;
+  parameterId?: string;
+  value: any;
+  numericValue?: number;
+  min?: number;
+  max?: number;
+  breach: 'below_min' | 'above_max' | 'out_of_range';
+  unit?: string;
+  quality: 'good' | 'bad' | 'uncertain';
+  timestamp: number;
+}
+
+export interface ThresholdPublishRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  httpUrl: string;
+  httpMethod: 'POST' | 'PUT';
+  httpHeaders?: string | Record<string, string>;
+  useJwt?: boolean;
+  jwtToken?: string;
+  jwtHeader?: string;
+  jsonFormat?: 'simple' | 'custom';
+  customJsonTemplate?: string;
+  watchedMappings: ThresholdWatchItem[];
+  snapshotMappingIds: string[];
+  cooldownSeconds?: number;
+  lastTriggeredAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface RealtimeData {
   mappingId: string;
   mappingName: string;

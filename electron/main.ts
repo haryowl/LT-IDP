@@ -10,6 +10,7 @@ import { HttpClientService } from './services/httpClient';
 import { DataMapperService } from './services/dataMapper';
 import { AuthService } from './services/auth';
 import { SparingService } from './services/sparingService';
+import { ThresholdPublishService } from './services/thresholdPublish';
 import { setupConsoleLogging, getLogger } from './services/logger';
 import { getStoredSession, setStoredSession, clearStoredSession } from './services/sessionStore';
 
@@ -49,6 +50,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let thresholdPublishService: ThresholdPublishService;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -89,6 +91,7 @@ async function initializeServices() {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
+  thresholdPublishService = new ThresholdPublishService(dbService, httpClientService);
 
   // Start SPARING scheduler if enabled
   const sparingConfig = sparingService.getSparingConfig();
@@ -172,6 +175,17 @@ async function initializeServices() {
         });
       }
     });
+  });
+
+  dataMapperService.on('dataMapped', (data: any) => {
+    thresholdPublishService.onMappedData(data);
+  });
+
+  thresholdPublishService.on('log', (logData: any) => {
+    logger.info('Threshold publish log:', logData);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('publisher:log', logData);
+    }
   });
 
   const autoStartPublishers = dbService
@@ -529,6 +543,34 @@ function setupIpcHandlers() {
     return dbService.getPublisherById(id);
   });
 
+  // Threshold-triggered HTTP publish rules
+  ipcMain.handle('thresholdRules:list', async () => {
+    return dbService.getThresholdPublishRules();
+  });
+
+  ipcMain.handle('thresholdRules:create', async (_, rule) => {
+    const created = dbService.createThresholdPublishRule(rule);
+    thresholdPublishService.reloadRules();
+    return created;
+  });
+
+  ipcMain.handle('thresholdRules:update', async (_, { id, rule }) => {
+    dbService.updateThresholdPublishRule(id, rule);
+    thresholdPublishService.reloadRules();
+    return dbService.getThresholdPublishRuleById(id);
+  });
+
+  ipcMain.handle('thresholdRules:delete', async (_, id) => {
+    dbService.deleteThresholdPublishRule(id);
+    thresholdPublishService.reloadRules();
+    return { ok: true };
+  });
+
+  ipcMain.handle('thresholdRules:test', async (_, id) => {
+    await thresholdPublishService.triggerRuleNow(id);
+    return { ok: true };
+  });
+
   // System Configuration
   ipcMain.handle('system:getClientId', async () => {
     return dbService.getClientId();
@@ -679,6 +721,7 @@ app.on('window-all-closed', () => {
   mqttSubscriberService?.cleanup();
   mqttPublisherService?.cleanup();
   httpClientService?.cleanup();
+  thresholdPublishService?.cleanup();
   sparingService?.stopHourlyScheduler();
   dbService?.close();
   logger.cleanup();
@@ -694,6 +737,7 @@ app.on('before-quit', () => {
   mqttSubscriberService?.cleanup();
   mqttPublisherService?.cleanup();
   httpClientService?.cleanup();
+  thresholdPublishService?.cleanup();
   dbService?.close();
   logger.cleanup();
 });

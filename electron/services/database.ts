@@ -10,6 +10,7 @@ import type {
   MqttDevice,
   ParameterMapping,
   Publisher,
+  ThresholdPublishRule,
   MqttBrokerConfig,
   HistoricalData,
   BufferItem,
@@ -436,6 +437,29 @@ export class DatabaseService {
         console.warn('Database migration warning:', error.message);
       }
     }
+
+    // Threshold-triggered HTTP publish rules
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS threshold_publish_rules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        http_url TEXT NOT NULL,
+        http_method TEXT NOT NULL CHECK(http_method IN ('POST', 'PUT')),
+        http_headers TEXT,
+        use_jwt INTEGER NOT NULL DEFAULT 0,
+        jwt_token TEXT,
+        jwt_header TEXT,
+        json_format TEXT NOT NULL DEFAULT 'simple',
+        custom_json_template TEXT,
+        watched_mappings TEXT NOT NULL,
+        snapshot_mapping_ids TEXT NOT NULL,
+        cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+        last_triggered_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
 
     // Buffer queue table
     this.db.exec(`
@@ -1139,6 +1163,90 @@ export class DatabaseService {
     this.db.prepare('DELETE FROM parameter_mappings WHERE id = ?').run(id);
   }
 
+  // Threshold-triggered HTTP publish rule operations
+  getThresholdPublishRules(): ThresholdPublishRule[] {
+    const rows = this.db.prepare('SELECT * FROM threshold_publish_rules ORDER BY created_at DESC').all();
+    return rows.map((row) => this.rowToThresholdPublishRule(row as any));
+  }
+
+  getThresholdPublishRuleById(id: string): ThresholdPublishRule | undefined {
+    const row = this.db.prepare('SELECT * FROM threshold_publish_rules WHERE id = ?').get(id);
+    return row ? this.rowToThresholdPublishRule(row as any) : undefined;
+  }
+
+  createThresholdPublishRule(rule: Partial<ThresholdPublishRule>): ThresholdPublishRule {
+    const id = uuidv4();
+    const now = Date.now();
+    this.db
+      .prepare(`
+        INSERT INTO threshold_publish_rules (
+          id, name, enabled, http_url, http_method, http_headers, use_jwt, jwt_token,
+          jwt_header, json_format, custom_json_template, watched_mappings, snapshot_mapping_ids,
+          cooldown_seconds, last_triggered_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        rule.name,
+        rule.enabled === false ? 0 : 1,
+        rule.httpUrl,
+        rule.httpMethod || 'POST',
+        rule.httpHeaders ? JSON.stringify(rule.httpHeaders) : null,
+        rule.useJwt ? 1 : 0,
+        rule.jwtToken,
+        rule.jwtHeader,
+        rule.jsonFormat || 'simple',
+        rule.customJsonTemplate,
+        JSON.stringify(rule.watchedMappings || []),
+        JSON.stringify(rule.snapshotMappingIds || []),
+        rule.cooldownSeconds || 0,
+        rule.lastTriggeredAt ?? null,
+        now,
+        now
+      );
+
+    return {
+      ...rule,
+      id,
+      enabled: rule.enabled !== false,
+      httpMethod: (rule.httpMethod || 'POST') as 'POST' | 'PUT',
+      jsonFormat: rule.jsonFormat || 'simple',
+      watchedMappings: rule.watchedMappings || [],
+      snapshotMappingIds: rule.snapshotMappingIds || [],
+      cooldownSeconds: rule.cooldownSeconds || 0,
+      createdAt: now,
+      updatedAt: now,
+    } as ThresholdPublishRule;
+  }
+
+  updateThresholdPublishRule(id: string, rule: Partial<ThresholdPublishRule>): void {
+    const updates: string[] = [];
+    const values: any[] = [];
+    Object.entries(rule).forEach(([key, value]) => {
+      if (key !== 'id' && key !== 'createdAt') {
+        const snakeKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        updates.push(`${snakeKey} = ?`);
+        if (key === 'httpHeaders' || key === 'watchedMappings' || key === 'snapshotMappingIds') {
+          values.push(value != null ? JSON.stringify(value) : null);
+        } else if (typeof value === 'boolean') {
+          values.push(value ? 1 : 0);
+        } else {
+          values.push(value ?? null);
+        }
+      }
+    });
+    if (updates.length > 0) {
+      updates.push('updated_at = ?');
+      values.push(Date.now());
+      values.push(id);
+      this.db.prepare(`UPDATE threshold_publish_rules SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    }
+  }
+
+  deleteThresholdPublishRule(id: string): void {
+    this.db.prepare('DELETE FROM threshold_publish_rules WHERE id = ?').run(id);
+  }
+
   // Historical Data operations
   insertHistoricalData(data: { mappingId: string; timestamp: number; value: any; quality: 'good' | 'bad' | 'uncertain' }): void {
     const id = uuidv4();
@@ -1595,6 +1703,28 @@ export class DatabaseService {
       scheduledEnabled: row.scheduled_enabled === 1,
       scheduledInterval: row.scheduled_interval,
       scheduledIntervalUnit: row.scheduled_interval_unit as 'seconds' | 'minutes' | 'hours' | undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private rowToThresholdPublishRule(row: any): ThresholdPublishRule {
+    return {
+      id: row.id,
+      name: row.name,
+      enabled: row.enabled === 1,
+      httpUrl: row.http_url,
+      httpMethod: (row.http_method || 'POST') as 'POST' | 'PUT',
+      httpHeaders: row.http_headers ? JSON.parse(row.http_headers) : undefined,
+      useJwt: row.use_jwt === 1,
+      jwtToken: row.jwt_token,
+      jwtHeader: row.jwt_header,
+      jsonFormat: row.json_format || 'simple',
+      customJsonTemplate: row.custom_json_template,
+      watchedMappings: row.watched_mappings ? JSON.parse(row.watched_mappings) : [],
+      snapshotMappingIds: row.snapshot_mapping_ids ? JSON.parse(row.snapshot_mapping_ids) : [],
+      cooldownSeconds: row.cooldown_seconds || 0,
+      lastTriggeredAt: row.last_triggered_at ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

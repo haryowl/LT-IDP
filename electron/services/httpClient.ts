@@ -11,6 +11,18 @@ interface HttpClientConnection {
   flushTimer?: NodeJS.Timeout;
 }
 
+interface HttpLikeConfig {
+  name?: string;
+  httpUrl?: string;
+  httpMethod?: string;
+  httpHeaders?: string | Record<string, string>;
+  useJwt?: boolean;
+  jwtToken?: string;
+  jwtHeader?: string;
+  jsonFormat?: 'simple' | 'custom';
+  customJsonTemplate?: string;
+}
+
 export class HttpClientService extends EventEmitter {
   private connections: Map<string, HttpClientConnection> = new Map();
 
@@ -74,6 +86,72 @@ export class HttpClientService extends EventEmitter {
     }
   }
 
+  private createClient(config: HttpLikeConfig) {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (config.httpHeaders) {
+      if (typeof config.httpHeaders === 'string') {
+        try {
+          Object.assign(headers, JSON.parse(config.httpHeaders));
+        } catch (_) {}
+      } else {
+        Object.assign(headers, config.httpHeaders);
+      }
+    }
+
+    const client = axios.create({
+      baseURL: config.httpUrl,
+      timeout: 30000,
+      headers,
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: true,
+      }),
+    });
+
+    if (config.useJwt && config.jwtToken) {
+      const headerName = config.jwtHeader || 'Authorization';
+      const headerValue = config.jwtToken.startsWith('Bearer ')
+        ? config.jwtToken
+        : `Bearer ${config.jwtToken}`;
+      client.defaults.headers.common[headerName] = headerValue;
+    }
+
+    return client;
+  }
+
+  private async sendRequestWithClient(client: any, method: string | undefined, payload: any): Promise<void> {
+    const normalized = method?.toLowerCase() || 'post';
+    try {
+      if (normalized === 'post') {
+        await client.post('', payload);
+      } else if (normalized === 'put') {
+        await client.put('', payload);
+      } else {
+        throw new Error(`HTTP method ${method} is not supported`);
+      }
+    } catch (error: any) {
+      console.error(`HTTP request error:`, error.message);
+      throw error;
+    }
+  }
+
+  async sendConfiguredRequest(config: HttpLikeConfig, templateContext: Record<string, any>, fallbackPayload: any): Promise<any> {
+    const client = this.createClient(config);
+    let payload = fallbackPayload;
+    if (config.jsonFormat === 'custom' && config.customJsonTemplate) {
+      try {
+        payload = this.renderTemplate(config.customJsonTemplate, templateContext);
+      } catch (error) {
+        console.error('Error applying custom JSON template, falling back to legacy template handling:', error);
+        payload = this.applyLegacyTemplate(config.customJsonTemplate, templateContext);
+      }
+    }
+    await this.sendRequestWithClient(client, config.httpMethod, payload);
+    return payload;
+  }
+
   async start(publisherId: string): Promise<void> {
     const publisher = this.db.getPublisherById(publisherId);
     if (!publisher || publisher.type !== 'http') {
@@ -88,39 +166,7 @@ export class HttpClientService extends EventEmitter {
     }
 
     try {
-      // Parse httpHeaders if it's a string, otherwise use as object
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      
-      if (publisher.httpHeaders) {
-        if (typeof publisher.httpHeaders === 'string') {
-          try {
-            Object.assign(headers, JSON.parse(publisher.httpHeaders));
-          } catch (e) {
-            // If parsing fails, ignore
-          }
-        } else {
-          Object.assign(headers, publisher.httpHeaders);
-        }
-      }
-      
-      const client = axios.create({
-        baseURL: publisher.httpUrl,
-        timeout: 30000,
-        headers,
-        httpsAgent: new https.Agent({
-          rejectUnauthorized: true,
-        }),
-      });
-
-      if (publisher.useJwt && publisher.jwtToken) {
-        const headerName = publisher.jwtHeader || 'Authorization';
-        const headerValue = publisher.jwtToken.startsWith('Bearer ')
-          ? publisher.jwtToken
-          : `Bearer ${publisher.jwtToken}`;
-        client.defaults.headers.common[headerName] = headerValue;
-      }
+      const client = this.createClient(publisher);
 
       const connection: HttpClientConnection = {
         publisher,
@@ -276,17 +322,7 @@ export class HttpClientService extends EventEmitter {
   }
 
   private async sendRequest(connection: HttpClientConnection, payload: any): Promise<void> {
-    const method = connection.publisher.httpMethod?.toLowerCase() || 'post';
-    try {
-      if (method === 'post') {
-        await connection.client.post('', payload);
-      } else if (method === 'put') {
-        await connection.client.put('', payload);
-      }
-    } catch (error: any) {
-      console.error(`HTTP request error:`, error.message);
-      throw error;
-    }
+    await this.sendRequestWithClient(connection.client, connection.publisher.httpMethod, payload);
   }
 
   private async flushBuffer(publisherId: string): Promise<void> {

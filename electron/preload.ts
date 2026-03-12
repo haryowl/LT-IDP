@@ -90,6 +90,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     toggle: (id: string, enabled: boolean) =>
       ipcRenderer.invoke('publishers:toggle', { id, enabled }),
   },
+  thresholdRules: {
+    list: () => ipcRenderer.invoke('thresholdRules:list'),
+    create: (rule: any) => ipcRenderer.invoke('thresholdRules:create', rule),
+    update: (id: string, rule: any) =>
+      ipcRenderer.invoke('thresholdRules:update', { id, rule }),
+    delete: (id: string) => ipcRenderer.invoke('thresholdRules:delete', id),
+    test: (id: string) => ipcRenderer.invoke('thresholdRules:test', id),
+  },
   // System Configuration
   system: {
     getClientId: () => ipcRenderer.invoke('system:getClientId'),

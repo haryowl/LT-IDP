@@ -11,6 +11,7 @@ import ModbusDevices from './pages/ModbusDevices';
 import MqttDevices from './pages/MqttDevices';
 import ParameterMappings from './pages/ParameterMappings';
 import Publishers from './pages/Publishers';
+import ThresholdPublishRules from './pages/ThresholdPublishRules';
 import Monitoring from './pages/Monitoring';
 import HistoricalData from './pages/HistoricalData';
 import SparingConfig from './pages/SparingConfig';
@@ -82,6 +83,7 @@ function App() {
           <Route path="mqtt" element={<MqttDevices />} />
           <Route path="mappings" element={<ParameterMappings />} />
           <Route path="publishers" element={<Publishers />} />
+          <Route path="threshold-rules" element={<ThresholdPublishRules />} />
           <Route path="monitoring" element={<Monitoring />} />
           <Route path="historical" element={<HistoricalData />} />
           <Route path="sparing" element={<SparingGuard><SparingConfig /></SparingGuard>} />

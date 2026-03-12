@@ -17,6 +17,7 @@ import { MqttBrokerService } from '../electron/services/mqttBroker';
 import { HttpClientService } from '../electron/services/httpClient';
 import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
+import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { getLogger } from '../electron/services/logger';
 import { SerialPort } from 'serialport';
 
@@ -53,6 +54,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let thresholdPublishService: ThresholdPublishService;
 
 // WebSocket broadcast (assigned after services created)
 let broadcast: (msg: { type: string; data?: any }) => void = () => {};
@@ -286,6 +288,32 @@ app.post('/api/publishers/toggle', authMiddleware, async (req, res) => {
   res.json(dbService.getPublisherById(id));
 });
 
+// ---------- Threshold-triggered HTTP publish rules ----------
+app.get('/api/threshold-rules', authMiddleware, (req, res) => res.json(dbService.getThresholdPublishRules()));
+app.post('/api/threshold-rules', authMiddleware, (req, res) => {
+  const created = dbService.createThresholdPublishRule(req.body);
+  thresholdPublishService.reloadRules();
+  res.json(created);
+});
+app.put('/api/threshold-rules/:id', authMiddleware, (req, res) => {
+  dbService.updateThresholdPublishRule(req.params.id, req.body);
+  thresholdPublishService.reloadRules();
+  res.json(dbService.getThresholdPublishRuleById(req.params.id));
+});
+app.delete('/api/threshold-rules/:id', authMiddleware, (req, res) => {
+  dbService.deleteThresholdPublishRule(req.params.id);
+  thresholdPublishService.reloadRules();
+  res.json({ ok: true });
+});
+app.post('/api/threshold-rules/:id/test', authMiddleware, async (req, res) => {
+  try {
+    await thresholdPublishService.triggerRuleNow(req.params.id);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Failed to test rule' });
+  }
+});
+
 // ---------- System ----------
 app.get('/api/system/client-id', authMiddleware, (req, res) => res.json(dbService.getClientId()));
 app.post('/api/system/client-id', authMiddleware, (req, res) => {
@@ -395,6 +423,7 @@ server.on('upgrade', (req, socket, head) => {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
+  thresholdPublishService = new ThresholdPublishService(dbService, httpClientService);
 
   broadcast = (msg: { type: string; data?: any }) => {
     const payload = JSON.stringify(msg);
@@ -421,7 +450,11 @@ server.on('upgrade', (req, socket, head) => {
     const httpPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'http');
     httpPubs.forEach((pub: any) => httpClientService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
   });
-  dataMapperService.on('dataMapped', (data: any) => broadcast({ type: 'data:realtime', data }));
+  dataMapperService.on('dataMapped', (data: any) => {
+    thresholdPublishService.onMappedData(data);
+    broadcast({ type: 'data:realtime', data });
+  });
+  thresholdPublishService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
 
   const sparingConfig = sparingService.getSparingConfig();
   if (sparingConfig?.enabled) {
