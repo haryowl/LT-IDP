@@ -11,25 +11,162 @@ import type {
 import { HttpClientService } from './httpClient';
 import { getLogger } from './logger';
 
-type ThresholdState = 'normal' | 'out_of_range';
+type ThresholdState = 'normal' | 'out_of_range' | 'stale';
+
+export type ConnectionStatusItem = {
+  deviceId: string;
+  deviceName: string;
+  type: 'modbus' | 'mqtt';
+  connected: boolean;
+};
 
 export class ThresholdPublishService extends EventEmitter {
   private rules = new Map<string, ThresholdPublishRule>();
   private latestValues = new Map<string, RealtimeData>();
   private thresholdStates = new Map<string, ThresholdState>();
+  /** When a watched device became disconnected (for disconnectedSeconds delay). */
+  private firstDisconnectedAt = new Map<string, number>();
+  private periodicCheckIntervalId: ReturnType<typeof setInterval> | null = null;
+  private readonly checkIntervalMs = 10_000;
 
   constructor(
     private db: DatabaseService,
-    private httpClientService: HttpClientService
+    private httpClientService: HttpClientService,
+    private getConnectionStatus?: () => ConnectionStatusItem[]
   ) {
     super();
     this.reloadRules();
+  }
+
+  startPeriodicCheck(): void {
+    if (this.periodicCheckIntervalId != null) return;
+    this.periodicCheckIntervalId = setInterval(() => {
+      this.checkStaleAndConnection().catch((err: any) => {
+        getLogger().error('Threshold periodic check error:', err?.message ?? err);
+      });
+    }, this.checkIntervalMs);
+    getLogger().info('Threshold publish periodic check started (stale/connection)');
+  }
+
+  stopPeriodicCheck(): void {
+    if (this.periodicCheckIntervalId != null) {
+      clearInterval(this.periodicCheckIntervalId);
+      this.periodicCheckIntervalId = null;
+    }
   }
 
   reloadRules(): void {
     this.rules = new Map(
       this.db.getThresholdPublishRules().map((rule) => [rule.id, rule])
     );
+  }
+
+  private async checkStaleAndConnection(): Promise<void> {
+    const now = Date.now();
+    const mappingLookup = new Map(
+      this.db.getParameterMappings().map((m) => [m.id, m])
+    );
+    const connectionStatus = this.getConnectionStatus?.() ?? [];
+
+    for (const rule of this.rules.values()) {
+      if (!rule.enabled) continue;
+
+      const cooldownMs = Math.max(0, rule.cooldownSeconds || 0) * 1000;
+      const inCooldown = cooldownMs > 0 && rule.lastTriggeredAt != null && now - rule.lastTriggeredAt < cooldownMs;
+
+      for (const watch of rule.watchedMappings) {
+        const staleSeconds = watch.staleSeconds;
+        if (staleSeconds == null || staleSeconds <= 0) continue;
+
+        const stateKey = `${rule.id}:${watch.mappingId}`;
+        const lastData = this.latestValues.get(watch.mappingId);
+        if (!lastData) continue;
+        const ageMs = now - lastData.timestamp;
+        const isStale = ageMs > staleSeconds * 1000;
+        const prevState = this.thresholdStates.get(stateKey) || 'normal';
+
+        if (isStale && prevState !== 'stale') {
+          this.thresholdStates.set(stateKey, 'stale');
+          if (!inCooldown) {
+            const mapping = mappingLookup.get(watch.mappingId);
+            const trigger: ThresholdTriggerContext = {
+              mappingId: watch.mappingId,
+              mappingName: lastData.mappingName,
+              parameterId: lastData.parameterId,
+              value: lastData.value,
+              numericValue: Number.isFinite(Number(lastData.value)) ? Number(lastData.value) : undefined,
+              breach: 'stale_data',
+              unit: lastData.unit,
+              quality: lastData.quality,
+              timestamp: lastData.timestamp,
+            };
+            await this.fireRule(rule, trigger, mappingLookup).catch((e: any) =>
+              getLogger().error(`Threshold rule "${rule.name}" stale trigger failed:`, e?.message ?? e)
+            );
+          }
+        } else if (!isStale && prevState === 'stale') {
+          this.thresholdStates.set(stateKey, 'normal');
+        }
+      }
+
+      const watchedDevices = rule.watchedDevices ?? [];
+      for (const wd of watchedDevices) {
+        const status = connectionStatus.find(
+          (s) => s.deviceId === wd.deviceId && s.type === wd.type
+        );
+        const connected = status?.connected ?? false;
+        const key = `${rule.id}:device:${wd.deviceId}`;
+        const delaySeconds = Math.max(0, wd.disconnectedSeconds ?? 0);
+        const delayMs = delaySeconds * 1000;
+
+        if (!connected) {
+          if (!this.firstDisconnectedAt.has(key)) {
+            this.firstDisconnectedAt.set(key, now);
+          }
+          const firstAt = this.firstDisconnectedAt.get(key)!;
+          const disconnectedLongEnough = now - firstAt >= delayMs;
+          if (!disconnectedLongEnough) continue;
+
+          const prevFired = this.thresholdStates.get(key) === 'out_of_range';
+          if (!prevFired && !inCooldown) {
+            this.thresholdStates.set(key, 'out_of_range');
+            const trigger: ThresholdTriggerContext = {
+              mappingId: '',
+              mappingName: status?.deviceName ?? wd.deviceId,
+              value: null,
+              breach: 'no_connection',
+              quality: 'bad',
+              timestamp: now,
+              deviceId: wd.deviceId,
+              deviceName: status?.deviceName,
+            };
+            await this.fireRule(rule, trigger, mappingLookup).catch((e: any) =>
+              getLogger().error(`Threshold rule "${rule.name}" connection trigger failed:`, e?.message ?? e)
+            );
+          }
+        } else {
+          this.firstDisconnectedAt.delete(key);
+          this.thresholdStates.delete(key);
+        }
+      }
+    }
+  }
+
+  private async fireRule(
+    rule: ThresholdPublishRule,
+    trigger: ThresholdTriggerContext,
+    mappingLookup: Map<string, any>
+  ): Promise<void> {
+    const seed = this.getMergedValues(
+      [
+        ...new Set([
+          ...rule.snapshotMappingIds,
+          ...rule.watchedMappings.map((w) => w.mappingId),
+        ]),
+      ],
+      mappingLookup
+    );
+    await this.sendRule(rule, trigger, seed, false);
   }
 
   onMappedData(data: RealtimeData): void {
@@ -99,9 +236,11 @@ export class ThresholdPublishService extends EventEmitter {
   }
 
   cleanup(): void {
+    this.stopPeriodicCheck();
     this.rules.clear();
     this.latestValues.clear();
     this.thresholdStates.clear();
+    this.firstDisconnectedAt.clear();
   }
 
   private async evaluateWatch(

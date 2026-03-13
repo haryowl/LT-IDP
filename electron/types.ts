@@ -135,6 +135,15 @@ export interface ThresholdWatchItem {
   mappingId: string;
   min?: number;
   max?: number;
+  /** If set, trigger when this mapping has not received data for this many seconds. */
+  staleSeconds?: number;
+}
+
+export interface ThresholdWatchedDevice {
+  deviceId: string;
+  type: 'modbus' | 'mqtt';
+  /** If set, trigger only after device has been disconnected for this many seconds. */
+  disconnectedSeconds?: number;
 }
 
 export interface ThresholdSnapshotItem {
@@ -155,10 +164,13 @@ export interface ThresholdTriggerContext {
   numericValue?: number;
   min?: number;
   max?: number;
-  breach: 'below_min' | 'above_max' | 'out_of_range';
+  breach: 'below_min' | 'above_max' | 'out_of_range' | 'stale_data' | 'no_connection';
   unit?: string;
   quality: 'good' | 'bad' | 'uncertain';
   timestamp: number;
+  /** Set when breach is 'no_connection'. */
+  deviceId?: string;
+  deviceName?: string;
 }
 
 export interface ThresholdPublishRule {
@@ -174,6 +186,8 @@ export interface ThresholdPublishRule {
   jsonFormat?: 'simple' | 'custom';
   customJsonTemplate?: string;
   watchedMappings: ThresholdWatchItem[];
+  /** When set, rule can trigger when these devices are disconnected (or disconnected for N seconds). */
+  watchedDevices?: ThresholdWatchedDevice[];
   snapshotMappingIds: string[];
   cooldownSeconds?: number;
   lastTriggeredAt?: number;

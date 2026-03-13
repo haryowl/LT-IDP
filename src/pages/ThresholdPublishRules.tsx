@@ -40,6 +40,13 @@ interface ThresholdWatchItem {
   mappingId: string;
   min?: number;
   max?: number;
+  staleSeconds?: number;
+}
+
+interface ThresholdWatchedDevice {
+  deviceId: string;
+  type: 'modbus' | 'mqtt';
+  disconnectedSeconds?: number;
 }
 
 interface ThresholdRule {
@@ -55,6 +62,7 @@ interface ThresholdRule {
   jsonFormat?: 'simple' | 'custom';
   customJsonTemplate?: string;
   watchedMappings: ThresholdWatchItem[];
+  watchedDevices?: ThresholdWatchedDevice[];
   snapshotMappingIds: string[];
   cooldownSeconds?: number;
   lastTriggeredAt?: number;
@@ -67,6 +75,8 @@ const emptyWatch: ThresholdWatchItem = { mappingId: '' };
 const ThresholdPublishRules: React.FC = () => {
   const [rules, setRules] = useState<ThresholdRule[]>([]);
   const [mappings, setMappings] = useState<any[]>([]);
+  const [modbusDevices, setModbusDevices] = useState<any[]>([]);
+  const [mqttDevices, setMqttDevices] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<ThresholdRule | null>(null);
   const [error, setError] = useState('');
@@ -83,6 +93,7 @@ const ThresholdPublishRules: React.FC = () => {
     jsonFormat: 'simple' as 'simple' | 'custom',
     customJsonTemplate: '',
     watchedMappings: [emptyWatch] as ThresholdWatchItem[],
+    watchedDevices: [] as ThresholdWatchedDevice[],
     snapshotMappingIds: [] as string[],
     cooldownSeconds: 0,
   });
@@ -90,7 +101,22 @@ const ThresholdPublishRules: React.FC = () => {
   useEffect(() => {
     loadRules();
     loadMappings();
+    loadDevices();
   }, []);
+
+  const loadDevices = async () => {
+    try {
+      const [modbus, mqtt] = await Promise.all([
+        api.modbus?.devices?.list?.() ?? Promise.resolve([]),
+        api.mqtt?.devices?.list?.() ?? Promise.resolve([]),
+      ]);
+      setModbusDevices(Array.isArray(modbus) ? modbus : []);
+      setMqttDevices(Array.isArray(mqtt) ? mqtt : []);
+    } catch {
+      setModbusDevices([]);
+      setMqttDevices([]);
+    }
+  };
 
   const mappingLookup = useMemo(() => {
     const map = new Map<string, any>();
@@ -131,6 +157,7 @@ const ThresholdPublishRules: React.FC = () => {
         jsonFormat: rule.jsonFormat || 'simple',
         customJsonTemplate: rule.customJsonTemplate || '',
         watchedMappings: rule.watchedMappings?.length ? rule.watchedMappings : [emptyWatch],
+        watchedDevices: rule.watchedDevices ?? [],
         snapshotMappingIds: rule.snapshotMappingIds || [],
         cooldownSeconds: rule.cooldownSeconds || 0,
       });
@@ -148,6 +175,7 @@ const ThresholdPublishRules: React.FC = () => {
         jsonFormat: 'simple',
         customJsonTemplate: '',
         watchedMappings: [emptyWatch],
+        watchedDevices: [],
         snapshotMappingIds: [],
         cooldownSeconds: 0,
       });
@@ -184,6 +212,27 @@ const ThresholdPublishRules: React.FC = () => {
     }));
   };
 
+  const handleWatchedDeviceChange = (index: number, patch: Partial<ThresholdWatchedDevice>) => {
+    setFormData((prev) => ({
+      ...prev,
+      watchedDevices: prev.watchedDevices.map((d, i) => (i === index ? { ...d, ...patch } : d)),
+    }));
+  };
+
+  const handleAddWatchedDevice = () => {
+    setFormData((prev) => ({
+      ...prev,
+      watchedDevices: [...prev.watchedDevices, { deviceId: '', type: 'modbus' }],
+    }));
+  };
+
+  const handleRemoveWatchedDevice = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      watchedDevices: prev.watchedDevices.filter((_, i) => i !== index),
+    }));
+  };
+
   const handleSubmit = async () => {
     try {
       setError('');
@@ -193,14 +242,24 @@ const ThresholdPublishRules: React.FC = () => {
           mappingId: item.mappingId,
           min: item.min === undefined || item.min === null || Number.isNaN(item.min) ? undefined : Number(item.min),
           max: item.max === undefined || item.max === null || Number.isNaN(item.max) ? undefined : Number(item.max),
+          staleSeconds: item.staleSeconds !== undefined && item.staleSeconds !== null && !Number.isNaN(item.staleSeconds) && item.staleSeconds > 0 ? Number(item.staleSeconds) : undefined,
         }));
 
-      if (watchedMappings.length === 0) {
-        setError('Please add at least one watched mapping.');
+      const watchedDevices = (formData.watchedDevices ?? [])
+        .filter((d) => d.deviceId && d.type)
+        .map((d) => ({
+          deviceId: d.deviceId,
+          type: d.type as 'modbus' | 'mqtt',
+          disconnectedSeconds: d.disconnectedSeconds !== undefined && d.disconnectedSeconds !== null && !Number.isNaN(d.disconnectedSeconds) && d.disconnectedSeconds >= 0 ? Number(d.disconnectedSeconds) : undefined,
+        }));
+
+      const hasValidWatch = watchedMappings.some((item) => item.min != null || item.max != null || (item.staleSeconds != null && item.staleSeconds > 0));
+      if (!hasValidWatch && watchedDevices.length === 0) {
+        setError('Add at least one watched mapping (with min/max or "no data for X seconds") or at least one watched device for connection alerts.');
         return;
       }
-      if (watchedMappings.some((item) => item.min == null && item.max == null)) {
-        setError('Each watched mapping must have a min, max, or both.');
+      if (watchedMappings.length > 0 && watchedMappings.some((item) => item.min == null && item.max == null && (item.staleSeconds == null || item.staleSeconds <= 0))) {
+        setError('Each watched mapping must have min, max, and/or "Alert if no data for (seconds)".');
         return;
       }
       if (!formData.httpUrl.trim()) {
@@ -222,6 +281,7 @@ const ThresholdPublishRules: React.FC = () => {
         ...formData,
         httpHeaders: httpHeadersParsed,
         watchedMappings,
+        watchedDevices,
       };
 
       if (editing) {
@@ -390,14 +450,17 @@ const ThresholdPublishRules: React.FC = () => {
 
             <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
               <Typography variant="h6" gutterBottom>Watched Mappings and Thresholds</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Trigger when value is out of range and/or when no data received for X seconds (stale).
+              </Typography>
               {formData.watchedMappings.map((watch, index) => (
-                <Box key={index} sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+                <Box key={index} sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2, alignItems: 'center' }}>
                   <TextField
                     label="Mapping"
                     select
                     value={watch.mappingId}
                     onChange={(e) => handleWatchChange(index, { mappingId: e.target.value })}
-                    sx={{ flex: 2 }}
+                    sx={{ minWidth: 180 }}
                   >
                     {mappings.map((mapping) => (
                       <MenuItem key={mapping.id} value={mapping.id}>
@@ -410,14 +473,23 @@ const ThresholdPublishRules: React.FC = () => {
                     type="number"
                     value={watch.min ?? ''}
                     onChange={(e) => handleWatchChange(index, { min: e.target.value === '' ? undefined : Number(e.target.value) })}
-                    sx={{ flex: 1 }}
+                    sx={{ width: 90 }}
                   />
                   <TextField
                     label="Max"
                     type="number"
                     value={watch.max ?? ''}
                     onChange={(e) => handleWatchChange(index, { max: e.target.value === '' ? undefined : Number(e.target.value) })}
-                    sx={{ flex: 1 }}
+                    sx={{ width: 90 }}
+                  />
+                  <TextField
+                    label="No data for (sec)"
+                    type="number"
+                    placeholder="Optional"
+                    value={watch.staleSeconds ?? ''}
+                    onChange={(e) => handleWatchChange(index, { staleSeconds: e.target.value === '' ? undefined : Number(e.target.value) })}
+                    sx={{ width: 120 }}
+                    helperText="Alert if no update"
                   />
                   <IconButton color="error" onClick={() => handleRemoveWatch(index)} aria-label="Remove watched mapping">
                     <DeleteIcon />
@@ -425,6 +497,51 @@ const ThresholdPublishRules: React.FC = () => {
                 </Box>
               ))}
               <Button onClick={handleAddWatch} startIcon={<AddIcon />}>Add Watched Mapping</Button>
+            </Box>
+
+            <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+              <Typography variant="h6" gutterBottom>Watched Devices (Connection Alerts)</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Trigger when a Modbus or MQTT device is disconnected (optionally after X seconds).
+              </Typography>
+              {formData.watchedDevices.map((wd, index) => (
+                <Box key={index} sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2, alignItems: 'center' }}>
+                  <TextField
+                    label="Type"
+                    select
+                    value={wd.type}
+                    onChange={(e) => handleWatchedDeviceChange(index, { type: e.target.value as 'modbus' | 'mqtt', deviceId: '' })}
+                    sx={{ minWidth: 100 }}
+                  >
+                    <MenuItem value="modbus">Modbus</MenuItem>
+                    <MenuItem value="mqtt">MQTT</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Device"
+                    select
+                    value={wd.deviceId}
+                    onChange={(e) => handleWatchedDeviceChange(index, { deviceId: e.target.value })}
+                    sx={{ minWidth: 200 }}
+                  >
+                    {(wd.type === 'modbus' ? modbusDevices : mqttDevices).map((d: any) => (
+                      <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Disconnected for (sec)"
+                    type="number"
+                    placeholder="0 = immediately"
+                    value={wd.disconnectedSeconds ?? ''}
+                    onChange={(e) => handleWatchedDeviceChange(index, { disconnectedSeconds: e.target.value === '' ? undefined : Number(e.target.value) })}
+                    sx={{ width: 140 }}
+                    inputProps={{ min: 0 }}
+                  />
+                  <IconButton color="error" onClick={() => handleRemoveWatchedDevice(index)} aria-label="Remove watched device">
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              ))}
+              <Button onClick={handleAddWatchedDevice} startIcon={<AddIcon />}>Add Watched Device</Button>
             </Box>
 
             <FormControl fullWidth>

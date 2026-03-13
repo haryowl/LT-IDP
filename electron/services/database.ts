@@ -555,6 +555,16 @@ export class DatabaseService {
         console.warn('Database migration warning (sparing_config.retry_interval_minutes):', error.message);
       }
     }
+
+    // Threshold publish rules: watched devices for connection alerts
+    try {
+      this.db.exec(`ALTER TABLE threshold_publish_rules ADD COLUMN watched_devices TEXT`);
+    } catch (error: any) {
+      if (!error.message?.includes('duplicate column name')) {
+        console.warn('Database migration warning (threshold_publish_rules.watched_devices):', error.message);
+      }
+    }
+
     // SPARING Send Queue table (for retry logic)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sparing_queue (
@@ -1181,9 +1191,9 @@ export class DatabaseService {
       .prepare(`
         INSERT INTO threshold_publish_rules (
           id, name, enabled, http_url, http_method, http_headers, use_jwt, jwt_token,
-          jwt_header, json_format, custom_json_template, watched_mappings, snapshot_mapping_ids,
+          jwt_header, json_format, custom_json_template, watched_mappings, watched_devices, snapshot_mapping_ids,
           cooldown_seconds, last_triggered_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -1198,6 +1208,7 @@ export class DatabaseService {
         rule.jsonFormat || 'simple',
         rule.customJsonTemplate,
         JSON.stringify(rule.watchedMappings || []),
+        JSON.stringify(rule.watchedDevices || []),
         JSON.stringify(rule.snapshotMappingIds || []),
         rule.cooldownSeconds || 0,
         rule.lastTriggeredAt ?? null,
@@ -1212,6 +1223,7 @@ export class DatabaseService {
       httpMethod: (rule.httpMethod || 'POST') as 'POST' | 'PUT',
       jsonFormat: rule.jsonFormat || 'simple',
       watchedMappings: rule.watchedMappings || [],
+      watchedDevices: rule.watchedDevices || [],
       snapshotMappingIds: rule.snapshotMappingIds || [],
       cooldownSeconds: rule.cooldownSeconds || 0,
       createdAt: now,
@@ -1226,7 +1238,7 @@ export class DatabaseService {
       if (key !== 'id' && key !== 'createdAt') {
         const snakeKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
         updates.push(`${snakeKey} = ?`);
-        if (key === 'httpHeaders' || key === 'watchedMappings' || key === 'snapshotMappingIds') {
+        if (key === 'httpHeaders' || key === 'watchedMappings' || key === 'watchedDevices' || key === 'snapshotMappingIds') {
           values.push(value != null ? JSON.stringify(value) : null);
         } else if (typeof value === 'boolean') {
           values.push(value ? 1 : 0);
@@ -1722,6 +1734,7 @@ export class DatabaseService {
       jsonFormat: row.json_format || 'simple',
       customJsonTemplate: row.custom_json_template,
       watchedMappings: row.watched_mappings ? JSON.parse(row.watched_mappings) : [],
+      watchedDevices: row.watched_devices != null && row.watched_devices !== '' ? JSON.parse(row.watched_devices) : [],
       snapshotMappingIds: row.snapshot_mapping_ids ? JSON.parse(row.snapshot_mapping_ids) : [],
       cooldownSeconds: row.cooldown_seconds || 0,
       lastTriggeredAt: row.last_triggered_at ?? undefined,

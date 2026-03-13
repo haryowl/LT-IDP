@@ -91,7 +91,11 @@ async function initializeServices() {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
-  thresholdPublishService = new ThresholdPublishService(dbService, httpClientService);
+  thresholdPublishService = new ThresholdPublishService(dbService, httpClientService, () => [
+    ...modbusService.getConnectionStatus(),
+    ...mqttSubscriberService.getConnectionStatus(),
+  ]);
+  thresholdPublishService.startPeriodicCheck();
 
   // Start SPARING scheduler if enabled
   const sparingConfig = sparingService.getSparingConfig();
