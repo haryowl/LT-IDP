@@ -5,6 +5,8 @@ import {
   Button,
   Checkbox,
   Chip,
+  Radio,
+  RadioGroup,
   Dialog,
   DialogActions,
   DialogContent,
@@ -65,6 +67,8 @@ interface ThresholdRule {
   watchedDevices?: ThresholdWatchedDevice[];
   snapshotMappingIds: string[];
   cooldownSeconds?: number;
+  reTriggerMode?: 'edge_only' | 'periodic_while_breach';
+  reTriggerIntervalSeconds?: number;
   lastTriggeredAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -96,6 +100,8 @@ const ThresholdPublishRules: React.FC = () => {
     watchedDevices: [] as ThresholdWatchedDevice[],
     snapshotMappingIds: [] as string[],
     cooldownSeconds: 0,
+    reTriggerMode: 'edge_only' as const,
+    reTriggerIntervalSeconds: 60,
   });
 
   useEffect(() => {
@@ -160,6 +166,8 @@ const ThresholdPublishRules: React.FC = () => {
         watchedDevices: rule.watchedDevices ?? [],
         snapshotMappingIds: rule.snapshotMappingIds || [],
         cooldownSeconds: rule.cooldownSeconds || 0,
+        reTriggerMode: rule.reTriggerMode || 'edge_only',
+        reTriggerIntervalSeconds: rule.reTriggerIntervalSeconds ?? 60,
       });
     } else {
       setEditing(null);
@@ -282,6 +290,10 @@ const ThresholdPublishRules: React.FC = () => {
         httpHeaders: httpHeadersParsed,
         watchedMappings,
         watchedDevices,
+        reTriggerMode: formData.reTriggerMode || 'edge_only',
+        reTriggerIntervalSeconds: formData.reTriggerMode === 'periodic_while_breach'
+          ? Math.max(0, Number(formData.reTriggerIntervalSeconds) || 60)
+          : undefined,
       };
 
       if (editing) {
@@ -582,6 +594,39 @@ const ThresholdPublishRules: React.FC = () => {
               fullWidth
               helperText="Prevents repeated sends while the same rule triggers again soon after."
             />
+
+            <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+              <Typography variant="subtitle1" gutterBottom>Re-trigger when value stays out of range</Typography>
+              <RadioGroup
+                value={formData.reTriggerMode || 'edge_only'}
+                onChange={(e) => setFormData({ ...formData, reTriggerMode: e.target.value as 'edge_only' | 'periodic_while_breach' })}
+              >
+                <FormControlLabel
+                  value="edge_only"
+                  control={<Radio />}
+                  label="Edge only: Re-trigger only when value returns to normal, then goes out of range again"
+                />
+                <FormControlLabel
+                  value="periodic_while_breach"
+                  control={<Radio />}
+                  label="Periodic while breach: Re-trigger every X seconds while value stays out of range"
+                />
+              </RadioGroup>
+              {formData.reTriggerMode === 'periodic_while_breach' && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, ml: 4 }}>
+                  <TextField
+                    type="number"
+                    label="Interval (seconds)"
+                    value={formData.reTriggerIntervalSeconds ?? 60}
+                    onChange={(e) => setFormData({ ...formData, reTriggerIntervalSeconds: Math.max(1, Number(e.target.value) || 60) })}
+                    sx={{ width: 120 }}
+                    size="small"
+                    inputProps={{ min: 1 }}
+                  />
+                  <Typography variant="body2" color="text.secondary">Minimum time between triggers while breach continues</Typography>
+                </Box>
+              )}
+            </Box>
 
             <TextField
               label="JSON Format"

@@ -565,6 +565,22 @@ export class DatabaseService {
       }
     }
 
+    // Threshold publish rules: re-trigger mode for value breach
+    try {
+      this.db.exec(`ALTER TABLE threshold_publish_rules ADD COLUMN re_trigger_mode TEXT`);
+    } catch (error: any) {
+      if (!error.message?.includes('duplicate column name')) {
+        console.warn('Database migration warning (threshold_publish_rules.re_trigger_mode):', error.message);
+      }
+    }
+    try {
+      this.db.exec(`ALTER TABLE threshold_publish_rules ADD COLUMN re_trigger_interval_seconds INTEGER`);
+    } catch (error: any) {
+      if (!error.message?.includes('duplicate column name')) {
+        console.warn('Database migration warning (threshold_publish_rules.re_trigger_interval_seconds):', error.message);
+      }
+    }
+
     // SPARING Send Queue table (for retry logic)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sparing_queue (
@@ -1192,8 +1208,8 @@ export class DatabaseService {
         INSERT INTO threshold_publish_rules (
           id, name, enabled, http_url, http_method, http_headers, use_jwt, jwt_token,
           jwt_header, json_format, custom_json_template, watched_mappings, watched_devices, snapshot_mapping_ids,
-          cooldown_seconds, last_triggered_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          cooldown_seconds, re_trigger_mode, re_trigger_interval_seconds, last_triggered_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         id,
@@ -1211,6 +1227,8 @@ export class DatabaseService {
         JSON.stringify(rule.watchedDevices || []),
         JSON.stringify(rule.snapshotMappingIds || []),
         rule.cooldownSeconds || 0,
+        rule.reTriggerMode ?? null,
+        rule.reTriggerIntervalSeconds ?? null,
         rule.lastTriggeredAt ?? null,
         now,
         now
@@ -1737,6 +1755,8 @@ export class DatabaseService {
       watchedDevices: row.watched_devices != null && row.watched_devices !== '' ? JSON.parse(row.watched_devices) : [],
       snapshotMappingIds: row.snapshot_mapping_ids ? JSON.parse(row.snapshot_mapping_ids) : [],
       cooldownSeconds: row.cooldown_seconds || 0,
+      reTriggerMode: row.re_trigger_mode || undefined,
+      reTriggerIntervalSeconds: row.re_trigger_interval_seconds ?? undefined,
       lastTriggeredAt: row.last_triggered_at ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

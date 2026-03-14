@@ -271,14 +271,21 @@ export class ThresholdPublishService extends EventEmitter {
     }
 
     this.thresholdStates.set(stateKey, 'out_of_range');
-    if (previousState === 'out_of_range') {
-      return;
-    }
 
     const now = Date.now();
     const cooldownMs = Math.max(0, rule.cooldownSeconds || 0) * 1000;
-    if (cooldownMs > 0 && rule.lastTriggeredAt && now - rule.lastTriggeredAt < cooldownMs) {
-      return;
+
+    if (previousState === 'out_of_range') {
+      const periodic = rule.reTriggerMode === 'periodic_while_breach' && (rule.reTriggerIntervalSeconds ?? 0) > 0;
+      if (!periodic) return;
+      const intervalMs = Math.max(cooldownMs, (rule.reTriggerIntervalSeconds ?? 0) * 1000);
+      if (intervalMs <= 0 || !rule.lastTriggeredAt || now - rule.lastTriggeredAt < intervalMs) {
+        return;
+      }
+    } else {
+      if (cooldownMs > 0 && rule.lastTriggeredAt && now - rule.lastTriggeredAt < cooldownMs) {
+        return;
+      }
     }
 
     const snapshot = this.buildSnapshot(rule);

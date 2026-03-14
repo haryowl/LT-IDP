@@ -190,6 +190,14 @@ export interface ThresholdPublishRule {
   watchedDevices?: ThresholdWatchedDevice[];
   snapshotMappingIds: string[];
   cooldownSeconds?: number;
+  /**
+   * When to consider a new excursion (re-trigger):
+   * - 'edge_only': Re-trigger only when value returns to normal, then goes out of range again (default).
+   * - 'periodic_while_breach': Re-trigger every reTriggerIntervalSeconds while value stays out of range.
+   */
+  reTriggerMode?: 'edge_only' | 'periodic_while_breach';
+  /** Seconds between re-triggers when value stays out of range. Used when reTriggerMode is 'periodic_while_breach'. */
+  reTriggerIntervalSeconds?: number;
   lastTriggeredAt?: number;
   createdAt: number;
   updatedAt: number;
