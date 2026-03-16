@@ -200,7 +200,7 @@ const SparingConfig: React.FC = () => {
       }
 
       const secret = await api.sparing?.fetchApiSecret();
-      await handleUpdateConfig({ apiSecret: secret });
+      await handleUpdateConfig({ apiSecret: secret, apiSecretFetchedAt: Date.now() });
       setSuccess('API Secret fetched successfully');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
@@ -364,10 +364,9 @@ const SparingConfig: React.FC = () => {
             <Grid item xs={12} md={6}>
               <TextField
                 label="API Secret"
-                value={config?.apiSecret ? '••••••••' : ''}
+                value={config?.apiSecret || ''}
                 fullWidth
-                disabled
-                helperText="Fetch from SPARING server"
+                helperText="Fetch from SPARING server (value shown after fetch)"
                 InputProps={{
                   endAdornment: (
                     <Button
