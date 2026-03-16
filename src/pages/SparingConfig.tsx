@@ -28,6 +28,7 @@ import {
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
+  Download as DownloadIcon,
   Refresh as RefreshIcon,
   Send as SendIcon,
   CloudUpload as CloudUploadIcon,
@@ -268,6 +269,29 @@ const SparingConfig: React.FC = () => {
       setError(err.message || 'Failed to send data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleExportSparingLog = async () => {
+    try {
+      setError('');
+      const result = await api.sparing?.exportLog();
+      if (!result?.content) {
+        setSuccess('No SPARING log file to export yet. Logs are created when data is sent.');
+        setTimeout(() => setSuccess(''), 4000);
+        return;
+      }
+      const blob = new Blob([result.content || ''], { type: 'application/x-ndjson' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'sparing-logs-export.jsonl';
+      a.click();
+      URL.revokeObjectURL(url);
+      setSuccess('SPARING log exported');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export SPARING log');
     }
   };
 
@@ -640,8 +664,20 @@ const SparingConfig: React.FC = () => {
 
       {tabValue === 2 && (
         <Paper sx={{ p: 3 }}>
-          <Typography variant="h6" gutterBottom>
-            Send Logs
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="h6">
+              Send Logs
+            </Typography>
+            <Button
+              variant="outlined"
+              startIcon={<DownloadIcon />}
+              onClick={handleExportSparingLog}
+            >
+              Export SPARING log (JSONL)
+            </Button>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Log file includes send_type, hour_timestamp, records_count, status, response, duration_ms, timestamp, json payload, and token. One JSON object per line.
           </Typography>
 
           <TableContainer>

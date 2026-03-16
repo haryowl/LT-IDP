@@ -676,6 +676,18 @@ function setupIpcHandlers() {
     return sparingService.getSparingLogs(limit || 50);
   });
 
+  ipcMain.handle('sparing:exportLog', async (_, date?: string) => {
+    const log = getLogger();
+    const result = log.readSparingLogForExport(date);
+    if (date) {
+      const single = result as { path: string; content: string; filename: string };
+      return { content: single.content, filename: single.filename || `sparing-${date}.jsonl` };
+    }
+    const files = result as { path: string; content: string; filename: string }[];
+    const content = files.filter((f) => f.content).map((f) => f.content).join('');
+    return { content, filename: 'sparing-logs-export.jsonl' };
+  });
+
   // Queue Management
   ipcMain.handle('sparing:processQueue', async () => {
     await sparingService.processQueue();

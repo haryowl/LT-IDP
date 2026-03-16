@@ -7,6 +7,9 @@ export class Logger {
   private currentLogFile: string;
   private currentDate: string;
   private logStream: fs.WriteStream | null = null;
+  private sparingLogFile: string = '';
+  private sparingLogStream: fs.WriteStream | null = null;
+  private sparingLogDate: string = '';
 
   constructor(baseDir?: string) {
     const dir = baseDir ?? path.join(os.homedir(), process.platform === 'win32' ? 'AppData/Roaming/ClientAPP' : '.config/ClientAPP');
@@ -135,10 +138,60 @@ export class Logger {
     return this.currentLogFile;
   }
 
+  /** Append one JSON line to the SPARING log file (sparing-YYYY-MM-DD.jsonl). */
+  writeSparingLog(jsonLine: string): void {
+    try {
+      this.ensureLogDir();
+      const today = this.getDateString();
+      if (today !== this.sparingLogDate || !this.sparingLogStream?.writable) {
+        if (this.sparingLogStream) {
+          this.sparingLogStream.end();
+          this.sparingLogStream = null;
+        }
+        this.sparingLogDate = today;
+        this.sparingLogFile = path.join(this.logDir, `sparing-${today}.jsonl`);
+        this.sparingLogStream = fs.createWriteStream(this.sparingLogFile, { flags: 'a' });
+      }
+      this.sparingLogStream.write(jsonLine.trim() + '\n');
+    } catch (error: any) {
+      console.error('Failed to write SPARING log:', error.message);
+    }
+  }
+
+  getSparingLogPath(date?: string): string {
+    const d = date || this.getDateString();
+    return path.join(this.logDir, `sparing-${d}.jsonl`);
+  }
+
+  /** Read SPARING log file(s) for export. Returns { path, content, filename } for the given date or all sparing-*.jsonl in logDir. */
+  readSparingLogForExport(date?: string): { path: string; content: string; filename: string } | { path: string; content: string; filename: string }[] {
+    const dir = this.logDir;
+    if (!fs.existsSync(dir)) {
+      return date ? { path: '', content: '', filename: '' } : [];
+    }
+    if (date) {
+      const p = path.join(dir, `sparing-${date}.jsonl`);
+      const content = fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : '';
+      return { path: p, content, filename: `sparing-${date}.jsonl` };
+    }
+    const files = fs.readdirSync(dir)
+      .filter((f) => f.startsWith('sparing-') && f.endsWith('.jsonl'))
+      .sort()
+      .reverse();
+    return files.map((f) => {
+      const p = path.join(dir, f);
+      return { path: p, content: fs.readFileSync(p, 'utf-8'), filename: f };
+    });
+  }
+
   cleanup(): void {
     if (this.logStream) {
       this.logStream.end();
       this.logStream = null;
+    }
+    if (this.sparingLogStream) {
+      this.sparingLogStream.end();
+      this.sparingLogStream = null;
     }
   }
 }

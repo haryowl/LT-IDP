@@ -571,6 +571,9 @@ export class SparingService {
       throw new Error('API Secret not configured');
     }
 
+    let hourlyData: SparingHourlyData | null = null;
+    let jwtToken: string = '';
+
     try {
       // Duplicate guard: do not send for the same hour twice
       if (config.lastHourlySend) {
@@ -581,7 +584,7 @@ export class SparingService {
         }
       }
 
-      const hourlyData = await this.collectHourlyData(hourTimestamp);
+      hourlyData = await this.collectHourlyData(hourTimestamp);
       if (!hourlyData) {
         getLogger().info('⚠️ No data to send');
         return;
@@ -602,7 +605,7 @@ export class SparingService {
         // ignore
       }
 
-      const jwtToken = this.encryptJWT(hourlyData, config.apiSecret);
+      jwtToken = this.encryptJWT(hourlyData, config.apiSecret);
       getLogger().info(`🔐 Generated JWT (hourly): ${jwtToken}`);
       try {
         const fileLogger = getLogger();
@@ -613,6 +616,19 @@ export class SparingService {
       const { SEND_HOURLY_URL } = this.getApiUrls();
       const response = await this.sendToSparing(SEND_HOURLY_URL, jwtToken);
       const duration = Date.now() - startTime;
+      const now = Date.now();
+
+      this.writeSparingLogEntry({
+        send_type: 'hourly',
+        hour_timestamp: hourTimestamp,
+        records_count: hourlyData.data.length,
+        status: response.status ? 'success' : 'failed',
+        response: JSON.stringify(response),
+        duration_ms: duration,
+        timestamp: now,
+        json: hourlyData,
+        token: jwtToken,
+      });
 
       if (response.status) {
         getLogger().info(`✅ Hourly batch sent successfully in ${duration}ms`);
@@ -628,6 +644,20 @@ export class SparingService {
       }
     } catch (error: any) {
       getLogger().error(`❌ Hourly batch send failed:`, error.message);
+
+      if (hourlyData && jwtToken) {
+        this.writeSparingLogEntry({
+          send_type: 'hourly',
+          hour_timestamp: hourTimestamp,
+          records_count: hourlyData.data.length,
+          status: 'failed',
+          response: error?.message || String(error),
+          duration_ms: 0,
+          timestamp: Date.now(),
+          json: hourlyData,
+          token: jwtToken,
+        });
+      }
 
       await this.addToQueue('hourly', hourTimestamp, error.message);
 
@@ -764,6 +794,39 @@ export class SparingService {
       next.twoMin = now + ((2 * 60 * 1000) - remainder);
     }
     return next;
+  }
+
+  // ============================================================================
+  // SPARING LOG FILE (exportable JSONL with json + token)
+  // ============================================================================
+  private writeSparingLogEntry(entry: {
+    send_type: string;
+    hour_timestamp: number | null;
+    records_count: number;
+    status: string;
+    response: string;
+    duration_ms: number;
+    timestamp: number;
+    json: any;
+    token: string;
+  }): void {
+    try {
+      const line = JSON.stringify({
+        send_type: entry.send_type,
+        hour_timestamp: entry.hour_timestamp,
+        records_count: entry.records_count,
+        status: entry.status,
+        response: entry.response,
+        duration_ms: entry.duration_ms,
+        timestamp: entry.timestamp,
+        timestamp_iso: new Date(entry.timestamp).toISOString(),
+        json: entry.json,
+        token: entry.token,
+      });
+      getLogger().writeSparingLog(line);
+    } catch (e: any) {
+      getLogger().error('Failed to write SPARING log entry:', e?.message);
+    }
   }
 
   // ============================================================================
@@ -1010,10 +1073,40 @@ export class SparingService {
         fileLogger.writeToFile(`[SPARING] Generated JWT (2-min): ${jwtToken}\n`);
       } catch {}
 
+      let response: any;
       const startTime = Date.now();
-      const { SEND_2MIN_URL } = this.getApiUrls();
-      const response = await this.sendToSparing(SEND_2MIN_URL, jwtToken);
+      try {
+        const { SEND_2MIN_URL } = this.getApiUrls();
+        response = await this.sendToSparing(SEND_2MIN_URL, jwtToken);
+      } catch (sendErr: any) {
+        this.writeSparingLogEntry({
+          send_type: '2min',
+          hour_timestamp: slotTimestamp,
+          records_count: twoMinData.data.length,
+          status: 'failed',
+          response: sendErr?.message || String(sendErr),
+          duration_ms: 0,
+          timestamp: Date.now(),
+          json: twoMinData,
+          token: jwtToken,
+        });
+        throw sendErr;
+      }
+
       const duration = Date.now() - startTime;
+      const now = Date.now();
+
+      this.writeSparingLogEntry({
+        send_type: '2min',
+        hour_timestamp: slotTimestamp,
+        records_count: twoMinData.data.length,
+        status: response.status ? 'success' : 'failed',
+        response: JSON.stringify(response),
+        duration_ms: duration,
+        timestamp: now,
+        json: twoMinData,
+        token: jwtToken,
+      });
 
       if (response.status) {
         getLogger().info(`✅ 2-minute data sent successfully in ${duration}ms`);

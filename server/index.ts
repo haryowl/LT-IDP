@@ -366,6 +366,21 @@ app.delete('/api/sparing/mappings/:id', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/sparing/logs', authMiddleware, (req, res) => res.json(sparingService.getSparingLogs(Number(req.query.limit) || 50)));
+app.get('/api/sparing/export-log', authMiddleware, (req, res) => {
+  try {
+    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+    const result = logger.readSparingLogForExport(date);
+    if (date) {
+      const single = result as { path: string; content: string; filename: string };
+      return res.json({ content: single.content, filename: single.filename || `sparing-${date}.jsonl` });
+    }
+    const files = result as { path: string; content: string; filename: string }[];
+    const content = files.filter((f) => f.content).map((f) => f.content).join('');
+    return res.json({ content, filename: 'sparing-logs-export.jsonl' });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message || 'Failed to export SPARING log' });
+  }
+});
 app.post('/api/sparing/process-queue', authMiddleware, (req, res) => {
   sparingService.processQueue().then(() => res.json({ ok: true }));
 });

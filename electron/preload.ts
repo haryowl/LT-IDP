@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('sparing:upsertMapping', sparingParam, mappingId),
     deleteMapping: (id: string) => ipcRenderer.invoke('sparing:deleteMapping', id),
     getLogs: (limit?: number) => ipcRenderer.invoke('sparing:getLogs', limit),
+    exportLog: (date?: string) => ipcRenderer.invoke('sparing:exportLog', date),
     processQueue: () => ipcRenderer.invoke('sparing:processQueue'),
     getQueueItems: (limit?: number) => ipcRenderer.invoke('sparing:getQueueItems', limit),
     sendNow: (hourTimestamp?: number) =>
