@@ -80,6 +80,7 @@ const SparingConfig: React.FC = () => {
   const [openMappingDialog, setOpenMappingDialog] = useState(false);
   const [newSparingParam, setNewSparingParam] = useState('');
   const [newMappingId, setNewMappingId] = useState('');
+  const [exportLogDate, setExportLogDate] = useState<string>('');
   const [status, setStatus] = useState<{ enabled: boolean; sendMode: string; queueDepth: number; lastHourlySend?: number | null; last2MinSend?: number | null; nextRuns?: any }>({ enabled: false, sendMode: 'hourly', queueDepth: 0 });
 
   useEffect(() => {
@@ -275,9 +276,10 @@ const SparingConfig: React.FC = () => {
   const handleExportSparingLog = async () => {
     try {
       setError('');
-      const result = await api.sparing?.exportLog();
+      const dateParam = exportLogDate.trim() || undefined;
+      const result = await api.sparing?.exportLog(dateParam);
       if (!result?.content) {
-        setSuccess('No SPARING log file to export yet. Logs are created when data is sent.');
+        setSuccess(dateParam ? `No SPARING log file for ${dateParam}.` : 'No SPARING log file to export yet. Logs are created when data is sent.');
         setTimeout(() => setSuccess(''), 4000);
         return;
       }
@@ -288,7 +290,7 @@ const SparingConfig: React.FC = () => {
       a.download = result.filename || 'sparing-logs-export.jsonl';
       a.click();
       URL.revokeObjectURL(url);
-      setSuccess('SPARING log exported');
+      setSuccess(dateParam ? `Exported log for ${dateParam}` : 'SPARING log exported');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
       setError(err.message || 'Failed to export SPARING log');
@@ -664,17 +666,29 @@ const SparingConfig: React.FC = () => {
 
       {tabValue === 2 && (
         <Paper sx={{ p: 3 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
             <Typography variant="h6">
               Send Logs
             </Typography>
-            <Button
-              variant="outlined"
-              startIcon={<DownloadIcon />}
-              onClick={handleExportSparingLog}
-            >
-              Export SPARING log (JSONL)
-            </Button>
+            <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+              <TextField
+                label="Export date"
+                type="date"
+                value={exportLogDate}
+                onChange={(e) => setExportLogDate(e.target.value)}
+                size="small"
+                sx={{ width: 180 }}
+                InputLabelProps={{ shrink: true }}
+                helperText={exportLogDate ? 'Export this day only' : 'Leave empty = all days'}
+              />
+              <Button
+                variant="outlined"
+                startIcon={<DownloadIcon />}
+                onClick={handleExportSparingLog}
+              >
+                Export SPARING log (JSONL)
+              </Button>
+            </Box>
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Log file includes send_type, hour_timestamp, records_count, status, response, duration_ms, timestamp, json payload, and token. One JSON object per line.
