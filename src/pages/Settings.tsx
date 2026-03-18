@@ -14,6 +14,7 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 import api from '../api/client';
 import { systemTimestampDefaults } from './ParameterMappings';
+import { useAuthStore } from '../store/authStore';
 
 interface ParameterMapping {
   id: string;
@@ -43,6 +44,16 @@ const Settings: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const role = useAuthStore((s) => s.role);
+
+  const [readOnlyToken, setReadOnlyToken] = useState('');
+  const [tokenLoading, setTokenLoading] = useState(false);
+
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwNew2, setPwNew2] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMessage, setPwMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [timestampMapping, setTimestampMapping] = useState<ParameterMapping | null>(null);
   const [timestampForm, setTimestampForm] = useState({
@@ -68,6 +79,7 @@ const Settings: React.FC = () => {
   useEffect(() => {
     loadSettings();
     loadTimestampMapping();
+    if (role === 'admin') loadReadOnlyToken();
   }, []);
 
   const loadSettings = async () => {
@@ -76,6 +88,35 @@ const Settings: React.FC = () => {
       setClientId(id || '');
     } catch (err: any) {
       setError(err.message || 'Failed to load settings');
+    }
+  };
+
+  const loadReadOnlyToken = async () => {
+    try {
+      setTokenLoading(true);
+      const r: any = await api.systemSecurity.getReadOnlyToken();
+      const token = typeof r === 'string' ? r : r?.token;
+      setReadOnlyToken(token || '');
+    } catch (e: any) {
+      // don't block settings load
+      console.warn('Failed to load read-only token:', e?.message);
+    } finally {
+      setTokenLoading(false);
+    }
+  };
+
+  const regenerateReadOnlyToken = async () => {
+    try {
+      setTokenLoading(true);
+      const r: any = await api.systemSecurity.regenerateReadOnlyToken();
+      const token = typeof r === 'string' ? r : r?.token;
+      setReadOnlyToken(token || '');
+      setSuccess('Read-only token regenerated');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to regenerate token');
+    } finally {
+      setTokenLoading(false);
     }
   };
 
@@ -157,6 +198,30 @@ const Settings: React.FC = () => {
     }
   };
 
+  const handleChangePassword = async () => {
+    try {
+      setPwSaving(true);
+      setPwMessage(null);
+      if (!pwCurrent || !pwNew) {
+        setPwMessage({ type: 'error', text: 'Please fill current and new password.' });
+        return;
+      }
+      if (pwNew !== pwNew2) {
+        setPwMessage({ type: 'error', text: 'New password confirmation does not match.' });
+        return;
+      }
+      await api.auth.changePassword(pwCurrent, pwNew);
+      setPwCurrent('');
+      setPwNew('');
+      setPwNew2('');
+      setPwMessage({ type: 'success', text: 'Password changed successfully.' });
+    } catch (e: any) {
+      setPwMessage({ type: 'error', text: e?.message || 'Failed to change password.' });
+    } finally {
+      setPwSaving(false);
+    }
+  };
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -204,6 +269,85 @@ const Settings: React.FC = () => {
             Save Settings
           </Button>
         </Box>
+      </Paper>
+
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          Security
+        </Typography>
+        <Divider sx={{ mb: 3 }} />
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+              Change password
+            </Typography>
+            {pwMessage && (
+              <Alert severity={pwMessage.type} sx={{ mb: 2 }} onClose={() => setPwMessage(null)}>
+                {pwMessage.text}
+              </Alert>
+            )}
+            <TextField
+              label="Current password"
+              type="password"
+              value={pwCurrent}
+              onChange={(e) => setPwCurrent(e.target.value)}
+              fullWidth
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="New password"
+              type="password"
+              value={pwNew}
+              onChange={(e) => setPwNew(e.target.value)}
+              fullWidth
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="Confirm new password"
+              type="password"
+              value={pwNew2}
+              onChange={(e) => setPwNew2(e.target.value)}
+              fullWidth
+            />
+            <Box sx={{ mt: 2 }}>
+              <Button variant="contained" onClick={handleChangePassword} disabled={pwSaving}>
+                {pwSaving ? 'Saving…' : 'Update password'}
+              </Button>
+            </Box>
+          </Grid>
+
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+              Public dashboard read-only token
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              This token grants read-only access to the public dashboard: <code>/public?token=…</code>. Keep it secret.
+              Regenerate if it leaks.
+            </Typography>
+            {role !== 'admin' ? (
+              <Alert severity="info">Only admin can view/regenerate the read-only token.</Alert>
+            ) : (
+              <>
+                <TextField
+                  label="Read-only token"
+                  value={readOnlyToken}
+                  fullWidth
+                  InputProps={{ readOnly: true }}
+                  helperText={tokenLoading ? 'Loading…' : 'Use /public?token=THIS_TOKEN'}
+                />
+                <Box sx={{ mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                  <Button variant="outlined" onClick={loadReadOnlyToken} disabled={tokenLoading}>
+                    Refresh
+                  </Button>
+                  <Button color="warning" variant="contained" onClick={regenerateReadOnlyToken} disabled={tokenLoading}>
+                    Regenerate token
+                  </Button>
+                </Box>
+              </>
+            )}
+          </Grid>
+        </Grid>
       </Paper>
 
       <Paper sx={{ p: 3 }}>

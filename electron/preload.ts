@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('auth:logout', { token }),
     verify: (token: string) =>
       ipcRenderer.invoke('auth:verify', { token }),
+    changePassword: (payload: { currentPassword: string; newPassword: string }) =>
+      ipcRenderer.invoke('auth:changePassword', payload),
     getStoredSession: () =>
       ipcRenderer.invoke('auth:getStoredSession'),
   },
@@ -107,6 +109,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLocalIp: () => ipcRenderer.invoke('system:getLocalIp'),
     getLogDirectory: () => ipcRenderer.invoke('system:getLogDirectory'),
     getCurrentLogFile: () => ipcRenderer.invoke('system:getCurrentLogFile'),
+    getReadOnlyToken: () => ipcRenderer.invoke('system:getReadOnlyToken'),
+    regenerateReadOnlyToken: () => ipcRenderer.invoke('system:regenerateReadOnlyToken'),
   },
   // SPARING Configuration
   sparing: {

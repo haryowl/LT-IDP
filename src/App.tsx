@@ -19,6 +19,7 @@ import MqttBroker from './pages/MqttBroker';
 import LogTerminal from './pages/LogTerminal';
 import Settings from './pages/Settings';
 import EmailNotifications from './pages/EmailNotifications';
+import PublicDashboard from './pages/PublicDashboard';
 
 function SparingGuard({ children }: { children: React.ReactNode }) {
   const role = useAuthStore((state) => state.role);
@@ -74,6 +75,7 @@ function App() {
   return (
     <HashRouter>
       <Routes>
+        <Route path="/public" element={<PublicDashboard />} />
         <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
         <Route
           path="/"

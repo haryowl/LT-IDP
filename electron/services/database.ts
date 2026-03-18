@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import type {
   User,
   ModbusDevice,
@@ -694,6 +695,12 @@ export class DatabaseService {
       .prepare('INSERT INTO users (id, username, password, role, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(id, user.username, hashedPassword, user.role, createdAt);
     return { id, username: user.username, role: user.role, createdAt };
+  }
+
+  updateUserPassword(username: string, hashedPassword: string): void {
+    const row = this.db.prepare('SELECT id FROM users WHERE username = ?').get(username) as any;
+    if (!row) throw new Error('User not found');
+    this.db.prepare('UPDATE users SET password = ? WHERE username = ?').run(hashedPassword, username);
   }
 
   // Modbus Device operations
@@ -1835,6 +1842,20 @@ export class DatabaseService {
   setSystemTimestampInterval(seconds: number): void {
     const safe = Math.max(1, Math.floor(seconds));
     this.setSystemConfig('systemTimestampInterval', String(safe));
+  }
+
+  getReadOnlyToken(): string {
+    const existing = this.getSystemConfig('readOnlyToken');
+    if (existing && existing.trim().length > 0) return existing.trim();
+    const token = crypto.randomBytes(24).toString('base64url');
+    this.setSystemConfig('readOnlyToken', token);
+    return token;
+  }
+
+  regenerateReadOnlyToken(): string {
+    const token = crypto.randomBytes(24).toString('base64url');
+    this.setSystemConfig('readOnlyToken', token);
+    return token;
   }
 
   getEmailNotificationSettings(): {

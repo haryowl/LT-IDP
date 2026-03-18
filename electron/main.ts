@@ -287,6 +287,12 @@ function setupIpcHandlers() {
     return authService.verifyToken(token);
   });
 
+  ipcMain.handle('auth:changePassword', async (_, { currentPassword, newPassword }) => {
+    const s = getStoredSession();
+    if (!s?.username) throw new Error('Not authenticated');
+    return await authService.changePassword(s.username, currentPassword, newPassword);
+  });
+
   ipcMain.handle('auth:getStoredSession', async () => {
     return getStoredSession();
   });
@@ -632,6 +638,14 @@ function setupIpcHandlers() {
 
   ipcMain.handle('system:getCurrentLogFile', async () => {
     return logger.getCurrentLogFile();
+  });
+
+  ipcMain.handle('system:getReadOnlyToken', async () => {
+    return dbService.getReadOnlyToken();
+  });
+
+  ipcMain.handle('system:regenerateReadOnlyToken', async () => {
+    return dbService.regenerateReadOnlyToken();
   });
 
   // ============================================================================

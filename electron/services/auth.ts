@@ -98,5 +98,18 @@ export class AuthService {
       }
     }
   }
+
+  async changePassword(username: string, currentPassword: string, newPassword: string): Promise<{ ok: true }> {
+    if (!newPassword || newPassword.trim().length < 6) {
+      throw new Error('New password must be at least 6 characters');
+    }
+    const user = this.db.getUserByUsername(username);
+    if (!user) throw new Error('User not found');
+    const isValid = await bcrypt.compare(currentPassword || '', user.password);
+    if (!isValid) throw new Error('Current password is incorrect');
+    const hashed = await bcrypt.hash(newPassword.trim(), 10);
+    this.db.updateUserPassword(username, hashed);
+    return { ok: true };
+  }
 }
 

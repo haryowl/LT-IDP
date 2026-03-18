@@ -61,6 +61,7 @@ let thresholdPublishService: ThresholdPublishService;
 // WebSocket broadcast (assigned after services created)
 let broadcast: (msg: { type: string; data?: any }) => void = () => {};
 const realtimeSubscribers: Set<string[]> = new Set();
+const publicRealtimeSubscribers: Set<string[]> = new Set();
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -79,6 +80,23 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   const result = authService.verifyToken(token);
   if (!result.valid) return res.status(401).json({ error: 'Invalid or expired token' });
   (req as any).user = result.user;
+  next();
+}
+
+function getReadOnlyTokenFromReq(req: express.Request): string | null {
+  const q = (req.query as any)?.ro;
+  if (typeof q === 'string' && q.trim()) return q.trim();
+  const h = req.headers['x-read-only-token'];
+  if (typeof h === 'string' && h.trim()) return h.trim();
+  return null;
+}
+
+function readOnlyMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const token = getReadOnlyTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing read-only token' });
+  const expected = dbService.getReadOnlyToken();
+  if (token !== expected) return res.status(403).json({ error: 'Invalid read-only token' });
+  (req as any).readOnly = true;
   next();
 }
 
@@ -112,6 +130,17 @@ app.get('/api/auth/session', (req, res) => {
   const result = authService.verifyToken(token);
   if (!result.valid || !result.user) return res.json(null);
   res.json({ token, username: result.user.username, role: result.user.role });
+});
+
+app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { currentPassword, newPassword } = req.body || {};
+    const r = await authService.changePassword(user.username, currentPassword, newPassword);
+    res.json(r);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Failed to change password' });
+  }
 });
 
 // ---------- Users ----------
@@ -342,6 +371,17 @@ app.get('/api/system/local-ip', authMiddleware, (req, res) => {
 app.get('/api/system/log-directory', authMiddleware, (req, res) => res.json(logger.getLogDirectory()));
 app.get('/api/system/current-log-file', authMiddleware, (req, res) => res.json(logger.getCurrentLogFile()));
 
+app.get('/api/system/read-only-token', authMiddleware, (req, res) => {
+  const user = (req as any).user;
+  if (user?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  res.json({ token: dbService.getReadOnlyToken() });
+});
+app.post('/api/system/read-only-token/regenerate', authMiddleware, (req, res) => {
+  const user = (req as any).user;
+  if (user?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  res.json({ token: dbService.regenerateReadOnlyToken() });
+});
+
 // ---------- SPARING ----------
 app.get('/api/sparing/config', authMiddleware, (req, res) => res.json(sparingService.getSparingConfig()));
 app.post('/api/sparing/config', authMiddleware, (req, res) => {
@@ -415,6 +455,19 @@ app.post('/api/email-notifications/test', authMiddleware, async (req, res) => {
   else res.status(400).json(r);
 });
 
+// ---------- Public Dashboard (read-only token) ----------
+app.get('/api/public/mappings', readOnlyMiddleware, (req, res) => {
+  const mappings = dbService.getParameterMappings().map((m: any) => ({
+    id: m.id,
+    name: m.name,
+    mappedName: m.mappedName,
+    unit: m.unit || '',
+    sourceType: m.sourceType,
+    sourceDeviceId: m.sourceDeviceId,
+  }));
+  res.json(mappings);
+});
+
 // ---------- Static (production) ----------
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
@@ -427,19 +480,69 @@ if (fs.existsSync(distPath)) {
 
 const server = http.createServer(app);
 
-// WebSocket: handle upgrade for /api/ws
+// WebSocket: handle upgrade for /api/ws and /api/public-ws
 const wss = new WebSocketServer({ noServer: true });
 const wsClients: Set<any> = new Set();
 wss.on('connection', (ws) => {
   wsClients.add(ws);
   ws.on('close', () => wsClients.delete(ws));
 });
+
+const publicWss = new WebSocketServer({ noServer: true });
+const publicWsClients: Set<any> = new Set();
+publicWss.on('connection', (ws) => {
+  publicWsClients.add(ws);
+  ws.on('close', () => publicWsClients.delete(ws));
+});
+
+function wsSendSafe(ws: any, payload: string) {
+  try {
+    if (ws.readyState === 1) ws.send(payload);
+  } catch (_) {}
+}
+
+function parseReqUrl(req: any): { pathname: string; searchParams: URLSearchParams } {
+  const u = new URL(req.url || '/', 'http://localhost');
+  return { pathname: u.pathname, searchParams: u.searchParams };
+}
+
+function canRealtimeFromJwt(token: string | null): boolean {
+  if (!token) return false;
+  const r = authService.verifyToken(token);
+  return !!r.valid;
+}
+
+function canRealtimeFromReadOnly(ro: string | null): boolean {
+  if (!ro) return false;
+  return ro === dbService.getReadOnlyToken();
+}
+
 server.on('upgrade', (req, socket, head) => {
-  if (req.url === '/api/ws' || req.url?.startsWith('/api/ws')) {
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-  } else {
-    socket.destroy();
+  const { pathname, searchParams } = parseReqUrl(req);
+
+  if (pathname === '/api/ws') {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const token = searchParams.get('token');
+      (ws as any).canRealtime = canRealtimeFromJwt(token);
+      wss.emit('connection', ws, req);
+    });
+    return;
   }
+
+  if (pathname === '/api/public-ws') {
+    const ro = searchParams.get('ro');
+    if (!canRealtimeFromReadOnly(ro)) {
+      socket.destroy();
+      return;
+    }
+    publicWss.handleUpgrade(req, socket, head, (ws) => {
+      (ws as any).canRealtime = true;
+      publicWss.emit('connection', ws, req);
+    });
+    return;
+  }
+
+  socket.destroy();
 });
 
 (async () => {
@@ -472,7 +575,16 @@ server.on('upgrade', (req, socket, head) => {
 
   broadcast = (msg: { type: string; data?: any }) => {
     const payload = JSON.stringify(msg);
-    wsClients.forEach((ws) => { try { if (ws.readyState === 1) ws.send(payload); } catch (_) {} });
+    if (msg.type === 'data:realtime') {
+      // Only authenticated WS connections should receive realtime payloads.
+      wsClients.forEach((ws) => {
+        if ((ws as any).canRealtime) wsSendSafe(ws, payload);
+      });
+      // Read-only token public dashboard WS
+      publicWsClients.forEach((ws) => wsSendSafe(ws, payload));
+      return;
+    }
+    wsClients.forEach((ws) => wsSendSafe(ws, payload));
   };
 
   modbusService.on('data', (data: any) => {

@@ -9,6 +9,7 @@ export interface ElectronAPI {
     login: (credentials: { username: string; password: string }) => Promise<any>;
     logout: (token: string) => Promise<any>;
     verify: (token: string) => Promise<any>;
+    changePassword: (payload: { currentPassword: string; newPassword: string }) => Promise<any>;
     getStoredSession: () => Promise<{ token: string; username: string; role: string } | null>;
   };
   users: {
@@ -74,6 +75,8 @@ export interface ElectronAPI {
     getClientId: () => Promise<string>;
     setClientId: (clientId: string) => Promise<any>;
     getLocalIp: () => Promise<string>;
+    getReadOnlyToken: () => Promise<string>;
+    regenerateReadOnlyToken: () => Promise<string>;
   };
   sparing: {
     getConfig: () => Promise<any>;

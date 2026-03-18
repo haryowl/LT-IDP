@@ -81,7 +81,8 @@ function ensureWsForEvents(): void {
   if (wsForEvents?.readyState === WebSocket.OPEN) return;
   if (wsForEvents != null) return; // connecting or closed, will reconnect on next use
   const url = getWebSocketUrl();
-  const ws = new WebSocket(`${url}/api/ws`);
+  const t = getToken();
+  const ws = new WebSocket(`${url}/api/ws${t ? `?token=${encodeURIComponent(t)}` : ''}`);
   wsForEvents = ws;
   ws.onmessage = (ev) => {
     try {
@@ -137,6 +138,10 @@ export const api = {
       if (isElectron) return (window as any).electronAPI.auth.verify(token);
       return request<{ valid: boolean; user?: any }>('GET', '/auth/verify', undefined as any);
     },
+    changePassword: async (currentPassword: string, newPassword: string) => {
+      if (isElectron) return (window as any).electronAPI.auth.changePassword({ currentPassword, newPassword });
+      return request('POST', '/auth/change-password', { currentPassword, newPassword });
+    },
     getStoredSession: async () => {
       if (isElectron) return (window as any).electronAPI.auth.getStoredSession();
       const r = await request<{ token: string; username: string; role: string } | null>('GET', '/auth/session');
@@ -172,7 +177,8 @@ export const api = {
     onRealtimeData: (callback: (data: any) => void) => {
       if (isElectron) return (window as any).electronAPI.on('data:realtime', (_: any, data: any) => callback(data));
       const url = getWebSocketUrl();
-      const ws = new WebSocket(`${url}/api/ws`);
+      const t = getToken();
+      const ws = new WebSocket(`${url}/api/ws${t ? `?token=${encodeURIComponent(t)}` : ''}`);
       ws.onmessage = (ev) => { try { const m = JSON.parse(ev.data); if (m.type === 'data:realtime') callback(m.data); } catch (_) {} };
       return () => ws.close();
     },
@@ -180,6 +186,16 @@ export const api = {
   publishers: { list: () => (isElectron ? (window as any).electronAPI.publishers.list() : request('GET', '/publishers')), create: (p: any) => (isElectron ? (window as any).electronAPI.publishers.create(p) : request('POST', '/publishers', p)), update: (id: string, p: any) => (isElectron ? (window as any).electronAPI.publishers.update(id, p) : request('PUT', `/publishers/${id}`, p)), delete: (id: string) => (isElectron ? (window as any).electronAPI.publishers.delete(id) : request('DELETE', `/publishers/${id}`)), toggle: (id: string, enabled: boolean) => (isElectron ? (window as any).electronAPI.publishers.toggle(id, enabled) : request('POST', '/publishers/toggle', { id, enabled })) },
   thresholdRules: { list: () => (isElectron ? (window as any).electronAPI.thresholdRules.list() : request('GET', '/threshold-rules')), create: (r: any) => (isElectron ? (window as any).electronAPI.thresholdRules.create(r) : request('POST', '/threshold-rules', r)), update: (id: string, r: any) => (isElectron ? (window as any).electronAPI.thresholdRules.update(id, r) : request('PUT', `/threshold-rules/${id}`, r)), delete: (id: string) => (isElectron ? (window as any).electronAPI.thresholdRules.delete(id) : request('DELETE', `/threshold-rules/${id}`)), test: (id: string) => (isElectron ? (window as any).electronAPI.thresholdRules.test(id) : request('POST', `/threshold-rules/${id}/test`)) },
   system: { getClientId: () => (isElectron ? (window as any).electronAPI.system.getClientId() : request('GET', '/system/client-id')), setClientId: (id: string) => (isElectron ? (window as any).electronAPI.system.setClientId(id) : request('POST', '/system/client-id', { clientId: id })), getLocalIp: () => (isElectron ? (window as any).electronAPI.system.getLocalIp() : request('GET', '/system/local-ip')), getTimestampInterval: () => (isElectron ? (window as any).electronAPI.system.getTimestampInterval?.() : request('GET', '/system/timestamp-interval')), setTimestampInterval: (s: number) => (isElectron ? (window as any).electronAPI.system.setTimestampInterval?.(s) : request('POST', '/system/timestamp-interval', { seconds: s })), getLogDirectory: () => (isElectron ? (window as any).electronAPI.system.getLogDirectory?.() : request('GET', '/system/log-directory')), getCurrentLogFile: () => (isElectron ? (window as any).electronAPI.system.getCurrentLogFile?.() : request('GET', '/system/current-log-file')) },
+  systemSecurity: {
+    getReadOnlyToken: () =>
+      isElectron
+        ? (window as any).electronAPI.system.getReadOnlyToken()
+        : request('GET', '/system/read-only-token'),
+    regenerateReadOnlyToken: () =>
+      isElectron
+        ? (window as any).electronAPI.system.regenerateReadOnlyToken()
+        : request('POST', '/system/read-only-token/regenerate'),
+  },
   sparing: { getConfig: () => (isElectron ? (window as any).electronAPI.sparing.getConfig() : request('GET', '/sparing/config')), updateConfig: (c: any) => (isElectron ? (window as any).electronAPI.sparing.updateConfig(c) : request('POST', '/sparing/config', c)), fetchApiSecret: () => (isElectron ? (window as any).electronAPI.sparing.fetchApiSecret() : request('POST', '/sparing/fetch-api-secret')), getMappings: () => (isElectron ? (window as any).electronAPI.sparing.getMappings() : request('GET', '/sparing/mappings')), upsertMapping: (sparingParam: string, mappingId: string) => (isElectron ? (window as any).electronAPI.sparing.upsertMapping(sparingParam, mappingId) : request('POST', '/sparing/mappings', { sparingParam, mappingId })), deleteMapping: (id: string) => (isElectron ? (window as any).electronAPI.sparing.deleteMapping(id) : request('DELETE', `/sparing/mappings/${id}`)), getLogs: (limit?: number) => (isElectron ? (window as any).electronAPI.sparing.getLogs(limit) : request('GET', `/sparing/logs?limit=${limit ?? 50}`)), exportLog: (date?: string) => (isElectron ? (window as any).electronAPI.sparing.exportLog(date) : request('GET', `/sparing/export-log${date ? `?date=${encodeURIComponent(date)}` : ''}`)), processQueue: () => (isElectron ? (window as any).electronAPI.sparing.processQueue() : request('POST', '/sparing/process-queue')), getQueueItems: (limit?: number) => (isElectron ? (window as any).electronAPI.sparing.getQueueItems(limit) : request('GET', `/sparing/queue?limit=${limit ?? 100}`)), sendNow: (hourTimestamp?: number) => (isElectron ? (window as any).electronAPI.sparing.sendNow(hourTimestamp) : request('POST', '/sparing/send-now', { hourTimestamp })), getStatus: () => (isElectron ? (window as any).electronAPI.sparing.getStatus() : request('GET', '/sparing/status')) },
   emailNotifications: {
     get: () =>
