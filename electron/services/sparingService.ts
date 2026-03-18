@@ -12,9 +12,24 @@ import type {
   SparingHourlyData,
 } from '../types';
 
+export type SparingSendLoggedCallback = (info: {
+  sendType: 'hourly' | '2min' | 'testing';
+  hourTimestamp: number | null;
+  recordsCount: number;
+  status: 'success' | 'failed';
+  response: string;
+  durationMs: number;
+}) => void;
+
 export class SparingService {
   // SPARING API URLs
   private readonly DEFAULT_API_BASE = 'https://sparing.kemenlh.go.id/api';
+
+  private sendLoggedCallback?: SparingSendLoggedCallback;
+
+  setSendLoggedCallback(cb?: SparingSendLoggedCallback): void {
+    this.sendLoggedCallback = cb;
+  }
 
   private getApiUrls() {
     const cfg = this.getSparingConfig();
@@ -851,6 +866,19 @@ export class SparingService {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(id, sendType, hourTimestamp || null, recordsCount, status, response, durationMs, now);
+
+    try {
+      this.sendLoggedCallback?.({
+        sendType,
+        hourTimestamp,
+        recordsCount,
+        status,
+        response,
+        durationMs,
+      });
+    } catch {
+      // ignore notifier errors
+    }
   }
 
   getSparingLogs(limit: number = 50): SparingLog[] {

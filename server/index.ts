@@ -17,6 +17,7 @@ import { MqttBrokerService } from '../electron/services/mqttBroker';
 import { HttpClientService } from '../electron/services/httpClient';
 import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
+import { EmailNotificationService } from '../electron/services/emailNotificationService';
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { getLogger } from '../electron/services/logger';
 import { SerialPort } from 'serialport';
@@ -54,6 +55,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let emailNotificationService!: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 
 // WebSocket broadcast (assigned after services created)
@@ -400,6 +402,19 @@ app.get('/api/sparing/status', authMiddleware, (req, res) => {
   });
 });
 
+app.get('/api/email-notifications', authMiddleware, (req, res) => {
+  res.json(emailNotificationService.getSettingsForApi());
+});
+app.post('/api/email-notifications', authMiddleware, (req, res) => {
+  emailNotificationService.saveSettings(req.body || {});
+  res.json(emailNotificationService.getSettingsForApi());
+});
+app.post('/api/email-notifications/test', authMiddleware, async (req, res) => {
+  const r = await emailNotificationService.testEmail();
+  if (r.ok) res.json(r);
+  else res.status(400).json(r);
+});
+
 // ---------- Static (production) ----------
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
@@ -438,6 +453,17 @@ server.on('upgrade', (req, socket, head) => {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
+  emailNotificationService = new EmailNotificationService(dbService, () => logger.getCurrentLogFile());
+  sparingService.setSendLoggedCallback((info) => {
+    void emailNotificationService.onSparingSendLogged(info);
+  });
+  setInterval(() => {
+    try {
+      emailNotificationService.tickScheduled();
+    } catch (e: any) {
+      logger.error('Email schedule tick:', errMsg(e));
+    }
+  }, 60 * 1000);
   thresholdPublishService = new ThresholdPublishService(dbService, httpClientService, () => [
     ...modbusService.getConnectionStatus(),
     ...mqttSubscriberService.getConnectionStatus(),

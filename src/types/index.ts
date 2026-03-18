@@ -86,6 +86,11 @@ export interface ElectronAPI {
     processQueue: () => Promise<any>;
     sendNow: (hourTimestamp?: number) => Promise<any>;
   };
+  emailNotifications: {
+    get: () => Promise<any>;
+    save: (body: any) => Promise<any>;
+    test: () => Promise<{ ok: boolean; error?: string }>;
+  };
   on: (channel: string, callback: (...args: any[]) => void) => () => void;
 }
 

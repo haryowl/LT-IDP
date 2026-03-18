@@ -18,6 +18,7 @@ import SparingConfig from './pages/SparingConfig';
 import MqttBroker from './pages/MqttBroker';
 import LogTerminal from './pages/LogTerminal';
 import Settings from './pages/Settings';
+import EmailNotifications from './pages/EmailNotifications';
 
 function SparingGuard({ children }: { children: React.ReactNode }) {
   const role = useAuthStore((state) => state.role);
@@ -87,6 +88,7 @@ function App() {
           <Route path="monitoring" element={<Monitoring />} />
           <Route path="historical" element={<HistoricalData />} />
           <Route path="sparing" element={<SparingGuard><SparingConfig /></SparingGuard>} />
+          <Route path="email-notifications" element={<SparingGuard><EmailNotifications /></SparingGuard>} />
           <Route path="mqtt-broker" element={<MqttBroker />} />
           <Route path="log-terminal" element={<LogTerminal />} />
           <Route path="settings" element={<Settings />} />

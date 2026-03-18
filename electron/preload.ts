@@ -125,6 +125,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('sparing:sendNow', hourTimestamp),
     getStatus: () => ipcRenderer.invoke('sparing:getStatus'),
   },
+  emailNotifications: {
+    get: () => ipcRenderer.invoke('emailNotifications:get'),
+    save: (body: any) => ipcRenderer.invoke('emailNotifications:save', body),
+    test: () => ipcRenderer.invoke('emailNotifications:test'),
+  },
   // Event listeners for real-time data
   on: (channel: string, callback: (...args: any[]) => void) => {
     const subscription = (_event: any, ...args: any[]) => callback(...args);

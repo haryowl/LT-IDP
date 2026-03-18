@@ -32,6 +32,7 @@ import {
   Storage as StorageIcon,
   Settings as SettingsIcon,
   Terminal as TerminalIcon,
+  Email as EmailIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import api from '../api/client';
@@ -49,6 +50,7 @@ const menuItems = [
   { text: 'Monitoring', icon: <MonitorIcon />, path: '/monitoring' },
   { text: 'Historical Data', icon: <HistoryIcon />, path: '/historical' },
   { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', admin: true },
+  { text: 'Email notifications', icon: <EmailIcon />, path: '/email-notifications', admin: true },
   { text: 'Log Terminal', icon: <TerminalIcon />, path: '/log-terminal' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];

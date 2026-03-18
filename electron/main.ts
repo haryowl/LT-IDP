@@ -10,6 +10,7 @@ import { HttpClientService } from './services/httpClient';
 import { DataMapperService } from './services/dataMapper';
 import { AuthService } from './services/auth';
 import { SparingService } from './services/sparingService';
+import { EmailNotificationService } from './services/emailNotificationService';
 import { ThresholdPublishService } from './services/thresholdPublish';
 import { setupConsoleLogging, getLogger } from './services/logger';
 import { getStoredSession, setStoredSession, clearStoredSession } from './services/sessionStore';
@@ -50,6 +51,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let emailNotificationService: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 
 function createWindow() {
@@ -91,6 +93,10 @@ async function initializeServices() {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
+  emailNotificationService = new EmailNotificationService(dbService, () => getLogger().getCurrentLogFile());
+  sparingService.setSendLoggedCallback((info) => {
+    void emailNotificationService.onSparingSendLogged(info);
+  });
   thresholdPublishService = new ThresholdPublishService(dbService, httpClientService, () => [
     ...modbusService.getConnectionStatus(),
     ...mqttSubscriberService.getConnectionStatus(),
@@ -117,6 +123,14 @@ async function initializeServices() {
       logger.error('MQTT Publisher health check failed:', error?.message ?? error);
     }
   }, 5 * 60 * 1000); // 5 minutes
+
+  setInterval(() => {
+    try {
+      emailNotificationService.tickScheduled();
+    } catch (e: any) {
+      logger.error('Email schedule tick failed:', e?.message);
+    }
+  }, 60 * 1000);
 
   // Wire up data flow
   modbusService.on('data', (data: any) => {
@@ -718,6 +732,13 @@ function setupIpcHandlers() {
       nextRuns,
     };
   });
+
+  ipcMain.handle('emailNotifications:get', async () => emailNotificationService.getSettingsForApi());
+  ipcMain.handle('emailNotifications:save', async (_, body) => {
+    emailNotificationService.saveSettings(body || {});
+    return emailNotificationService.getSettingsForApi();
+  });
+  ipcMain.handle('emailNotifications:test', async () => emailNotificationService.testEmail());
 }
 
 app.whenReady().then(async () => {

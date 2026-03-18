@@ -623,6 +623,41 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_sparing_mappings_param 
       ON sparing_mappings(sparing_param);
     `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS email_notification_settings (
+        id TEXT PRIMARY KEY,
+        smtp_host TEXT,
+        smtp_port INTEGER DEFAULT 587,
+        smtp_secure INTEGER DEFAULT 0,
+        smtp_user TEXT,
+        smtp_password TEXT,
+        from_address TEXT,
+        to_addresses TEXT,
+        schedule_enabled INTEGER DEFAULT 0,
+        schedule_time TEXT DEFAULT '08:00',
+        schedule_include_sparing INTEGER DEFAULT 1,
+        schedule_include_app_log INTEGER DEFAULT 0,
+        schedule_only_if_activity INTEGER DEFAULT 0,
+        trigger_sparing_failure INTEGER DEFAULT 1,
+        trigger_cooldown_minutes INTEGER DEFAULT 60,
+        last_scheduled_run_date TEXT,
+        last_trigger_sent_at INTEGER,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    try {
+      const ex = this.db.prepare('SELECT 1 FROM email_notification_settings WHERE id = ?').get('default');
+      if (!ex) {
+        this.db
+          .prepare(
+            `INSERT INTO email_notification_settings (id, schedule_time, updated_at) VALUES ('default', '08:00', ?)`
+          )
+          .run(Date.now());
+      }
+    } catch (e: any) {
+      console.warn('email_notification_settings seed:', e?.message);
+    }
   }
 
   async createDefaultUser(): Promise<void> {
@@ -1800,6 +1835,156 @@ export class DatabaseService {
   setSystemTimestampInterval(seconds: number): void {
     const safe = Math.max(1, Math.floor(seconds));
     this.setSystemConfig('systemTimestampInterval', String(safe));
+  }
+
+  getEmailNotificationSettings(): {
+    id: string;
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecure: boolean;
+    smtpUser: string;
+    smtpPassword: string;
+    fromAddress: string;
+    toAddresses: string;
+    scheduleEnabled: boolean;
+    scheduleTime: string;
+    scheduleIncludeSparing: boolean;
+    scheduleIncludeAppLog: boolean;
+    scheduleOnlyIfActivity: boolean;
+    triggerSparingFailure: boolean;
+    triggerCooldownMinutes: number;
+    lastScheduledRunDate: string | null;
+    lastTriggerSentAt: number | null;
+    updatedAt: number;
+  } {
+    const row = this.db.prepare('SELECT * FROM email_notification_settings WHERE id = ?').get('default') as any;
+    if (!row) {
+      return {
+        id: 'default',
+        smtpHost: '',
+        smtpPort: 587,
+        smtpSecure: false,
+        smtpUser: '',
+        smtpPassword: '',
+        fromAddress: '',
+        toAddresses: '',
+        scheduleEnabled: false,
+        scheduleTime: '08:00',
+        scheduleIncludeSparing: true,
+        scheduleIncludeAppLog: false,
+        scheduleOnlyIfActivity: false,
+        triggerSparingFailure: true,
+        triggerCooldownMinutes: 60,
+        lastScheduledRunDate: null,
+        lastTriggerSentAt: null,
+        updatedAt: 0,
+      };
+    }
+    return {
+      id: row.id,
+      smtpHost: row.smtp_host || '',
+      smtpPort: row.smtp_port ?? 587,
+      smtpSecure: Boolean(row.smtp_secure),
+      smtpUser: row.smtp_user || '',
+      smtpPassword: row.smtp_password || '',
+      fromAddress: row.from_address || '',
+      toAddresses: row.to_addresses || '',
+      scheduleEnabled: Boolean(row.schedule_enabled),
+      scheduleTime: row.schedule_time || '08:00',
+      scheduleIncludeSparing: Boolean(row.schedule_include_sparing),
+      scheduleIncludeAppLog: Boolean(row.schedule_include_app_log),
+      scheduleOnlyIfActivity: Boolean(row.schedule_only_if_activity),
+      triggerSparingFailure: Boolean(row.trigger_sparing_failure),
+      triggerCooldownMinutes: Math.max(1, row.trigger_cooldown_minutes ?? 60),
+      lastScheduledRunDate: row.last_scheduled_run_date || null,
+      lastTriggerSentAt: row.last_trigger_sent_at ?? null,
+      updatedAt: row.updated_at ?? 0,
+    };
+  }
+
+  upsertEmailNotificationSettings(updates: {
+    smtpHost?: string;
+    smtpPort?: number;
+    smtpSecure?: boolean;
+    smtpUser?: string;
+    smtpPassword?: string | null;
+    fromAddress?: string;
+    toAddresses?: string;
+    scheduleEnabled?: boolean;
+    scheduleTime?: string;
+    scheduleIncludeSparing?: boolean;
+    scheduleIncludeAppLog?: boolean;
+    scheduleOnlyIfActivity?: boolean;
+    triggerSparingFailure?: boolean;
+    triggerCooldownMinutes?: number;
+  }): void {
+    const cur = this.getEmailNotificationSettings();
+    const pass =
+      updates.smtpPassword === undefined || updates.smtpPassword === ''
+        ? cur.smtpPassword
+        : updates.smtpPassword;
+    const now = Date.now();
+    const s = {
+      smtpHost: updates.smtpHost !== undefined ? updates.smtpHost : cur.smtpHost,
+      smtpPort: updates.smtpPort !== undefined ? updates.smtpPort : cur.smtpPort,
+      smtpSecure: updates.smtpSecure !== undefined ? updates.smtpSecure : cur.smtpSecure,
+      smtpUser: updates.smtpUser !== undefined ? updates.smtpUser : cur.smtpUser,
+      smtpPassword: pass,
+      fromAddress: updates.fromAddress !== undefined ? updates.fromAddress : cur.fromAddress,
+      toAddresses: updates.toAddresses !== undefined ? updates.toAddresses : cur.toAddresses,
+      scheduleEnabled: updates.scheduleEnabled !== undefined ? updates.scheduleEnabled : cur.scheduleEnabled,
+      scheduleTime: updates.scheduleTime !== undefined ? updates.scheduleTime : cur.scheduleTime,
+      scheduleIncludeSparing:
+        updates.scheduleIncludeSparing !== undefined ? updates.scheduleIncludeSparing : cur.scheduleIncludeSparing,
+      scheduleIncludeAppLog:
+        updates.scheduleIncludeAppLog !== undefined ? updates.scheduleIncludeAppLog : cur.scheduleIncludeAppLog,
+      scheduleOnlyIfActivity:
+        updates.scheduleOnlyIfActivity !== undefined ? updates.scheduleOnlyIfActivity : cur.scheduleOnlyIfActivity,
+      triggerSparingFailure:
+        updates.triggerSparingFailure !== undefined ? updates.triggerSparingFailure : cur.triggerSparingFailure,
+      triggerCooldownMinutes:
+        updates.triggerCooldownMinutes !== undefined
+          ? Math.max(1, updates.triggerCooldownMinutes)
+          : cur.triggerCooldownMinutes,
+    };
+    this.db
+      .prepare(
+        `UPDATE email_notification_settings SET
+          smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_user = ?, smtp_password = ?,
+          from_address = ?, to_addresses = ?, schedule_enabled = ?, schedule_time = ?,
+          schedule_include_sparing = ?, schedule_include_app_log = ?, schedule_only_if_activity = ?,
+          trigger_sparing_failure = ?, trigger_cooldown_minutes = ?, updated_at = ?
+        WHERE id = 'default'`
+      )
+      .run(
+        s.smtpHost || null,
+        s.smtpPort,
+        s.smtpSecure ? 1 : 0,
+        s.smtpUser || null,
+        s.smtpPassword || null,
+        s.fromAddress || null,
+        s.toAddresses || null,
+        s.scheduleEnabled ? 1 : 0,
+        s.scheduleTime,
+        s.scheduleIncludeSparing ? 1 : 0,
+        s.scheduleIncludeAppLog ? 1 : 0,
+        s.scheduleOnlyIfActivity ? 1 : 0,
+        s.triggerSparingFailure ? 1 : 0,
+        s.triggerCooldownMinutes,
+        now
+      );
+  }
+
+  setEmailLastScheduledRunDate(date: string): void {
+    this.db
+      .prepare('UPDATE email_notification_settings SET last_scheduled_run_date = ? WHERE id = ?')
+      .run(date, 'default');
+  }
+
+  setEmailLastTriggerSent(at: number): void {
+    this.db
+      .prepare('UPDATE email_notification_settings SET last_trigger_sent_at = ? WHERE id = ?')
+      .run(at, 'default');
   }
 
   close(): void {
