@@ -23,6 +23,12 @@ import PublicDashboard from './pages/PublicDashboard';
 
 function SparingGuard({ children }: { children: React.ReactNode }) {
   const role = useAuthStore((state) => state.role);
+  if (role !== 'admin' && role !== 'guest') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore((state) => state.role);
   if (role !== 'admin') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -61,7 +67,7 @@ function App() {
         }
         return api.auth.verify(session.token).then((result: any) => {
           if (result?.valid && result?.user) {
-            const role = (result.user.role === 'admin' ? 'admin' : 'viewer') as UserRole;
+            const role = (result.user.role === 'admin' ? 'admin' : result.user.role === 'guest' ? 'guest' : 'viewer') as UserRole;
             setFromSession(session.token, session.username, role);
           }
         });
@@ -90,7 +96,7 @@ function App() {
           <Route path="monitoring" element={<Monitoring />} />
           <Route path="historical" element={<HistoricalData />} />
           <Route path="sparing" element={<SparingGuard><SparingConfig /></SparingGuard>} />
-          <Route path="email-notifications" element={<SparingGuard><EmailNotifications /></SparingGuard>} />
+          <Route path="email-notifications" element={<AdminGuard><EmailNotifications /></AdminGuard>} />
           <Route path="mqtt-broker" element={<MqttBroker />} />
           <Route path="log-terminal" element={<LogTerminal />} />
           <Route path="settings" element={<Settings />} />

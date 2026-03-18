@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -34,12 +34,19 @@ import {
   Terminal as TerminalIcon,
   Email as EmailIcon,
 } from '@mui/icons-material';
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, type UserRole } from '../store/authStore';
 import api from '../api/client';
 
 const drawerWidth = 260;
 
-const menuItems = [
+type MenuItem = {
+  text: string;
+  icon: React.ReactNode;
+  path: string;
+  roles?: UserRole[];
+};
+
+const menuItems: MenuItem[] = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Modbus Devices', icon: <MemoryIcon />, path: '/modbus' },
   { text: 'MQTT Devices', icon: <RouterIcon />, path: '/mqtt' },
@@ -49,8 +56,8 @@ const menuItems = [
   { text: 'Threshold Rules', icon: <NotificationsActiveIcon />, path: '/threshold-rules' },
   { text: 'Monitoring', icon: <MonitorIcon />, path: '/monitoring' },
   { text: 'Historical Data', icon: <HistoryIcon />, path: '/historical' },
-  { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', admin: true },
-  { text: 'Email notifications', icon: <EmailIcon />, path: '/email-notifications', admin: true },
+  { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', roles: ['admin', 'guest'] },
+  { text: 'Email notifications', icon: <EmailIcon />, path: '/email-notifications', roles: ['admin'] },
   { text: 'Log Terminal', icon: <TerminalIcon />, path: '/log-terminal' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
@@ -62,9 +69,16 @@ const Layout: React.FC = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
-  const visibleMenuItems = menuItems.filter(
-    (item) => !('admin' in item && item.admin && role !== 'admin')
-  );
+  const visibleMenuItems = menuItems.filter((item) => {
+    if (role === 'guest') return item.path === '/sparing';
+    return !item.roles || (role && item.roles.includes(role));
+  });
+
+  useEffect(() => {
+    if (role === 'guest' && location.pathname !== '/sparing') {
+      navigate('/sparing');
+    }
+  }, [role, location.pathname, navigate]);
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);

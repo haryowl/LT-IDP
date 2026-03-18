@@ -35,7 +35,7 @@ const Login: React.FC = () => {
       });
 
       if (result?.token && result?.user) {
-        const role = result.user.role === 'admin' ? 'admin' : 'viewer';
+        const role = result.user.role === 'admin' ? 'admin' : result.user.role === 'guest' ? 'guest' : 'viewer';
         login(result.token, result.user.username, role);
         navigate('/');
       } else {

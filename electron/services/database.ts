@@ -75,13 +75,41 @@ export class DatabaseService {
   }
 
   createTables(): void {
+    // Migrate users.role constraint to include 'guest' (SQLite can't ALTER CHECK constraints).
+    try {
+      const existingUsers = this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+        .get() as any;
+      const sql = existingUsers?.sql || '';
+      if (sql && sql.includes('CHECK(role IN') && sql.includes("'admin', 'viewer'") && !sql.includes('guest')) {
+        this.db.exec('ALTER TABLE users RENAME TO users_old');
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'viewer', 'guest')),
+            created_at INTEGER NOT NULL
+          )
+        `);
+        this.db.exec(
+          `INSERT INTO users (id, username, password, role, created_at)
+           SELECT id, username, password, role, created_at FROM users_old`
+        );
+        this.db.exec('DROP TABLE users_old');
+      }
+    } catch (e: any) {
+      // If migration fails, we'll still try to create the tables for fresh DBs.
+      console.warn('User role migration (guest) warning:', e?.message || e);
+    }
+
     // Users table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('admin', 'viewer')),
+        role TEXT NOT NULL CHECK(role IN ('admin', 'viewer', 'guest')),
         created_at INTEGER NOT NULL
       )
     `);
@@ -687,7 +715,7 @@ export class DatabaseService {
     };
   }
 
-  async createUser(user: { username: string; password: string; role: 'admin' | 'viewer' }): Promise<User> {
+  async createUser(user: { username: string; password: string; role: 'admin' | 'viewer' | 'guest' }): Promise<User> {
     const id = uuidv4();
     const hashedPassword = await bcrypt.hash(user.password, 10);
     const createdAt = Date.now();

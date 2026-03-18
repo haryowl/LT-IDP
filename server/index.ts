@@ -80,6 +80,14 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   const result = authService.verifyToken(token);
   if (!result.valid) return res.status(401).json({ error: 'Invalid or expired token' });
   (req as any).user = result.user;
+  // Guest role: allow only SPARING APIs (and /api/auth/* which are not protected by this middleware).
+  // This protects the backend even if someone tries to call other endpoints directly.
+  if ((result.user as any)?.role === 'guest') {
+    const url = req.originalUrl || req.url || '';
+    if (!String(url).startsWith('/api/sparing')) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
   next();
 }
 
@@ -97,6 +105,12 @@ function readOnlyMiddleware(req: express.Request, res: express.Response, next: e
   const expected = dbService.getReadOnlyToken();
   if (token !== expected) return res.status(403).json({ error: 'Invalid read-only token' });
   (req as any).readOnly = true;
+  next();
+}
+
+function sparingRoleMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const role = (req as any).user?.role;
+  if (role !== 'admin' && role !== 'guest') return res.status(403).json({ error: 'Forbidden' });
   next();
 }
 
@@ -145,9 +159,13 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
 
 // ---------- Users ----------
 app.get('/api/users/list', authMiddleware, (req, res) => {
+  const role = (req as any).user?.role;
+  if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   res.json(dbService.getUsers());
 });
 app.post('/api/users/create', authMiddleware, (req, res) => {
+  const role = (req as any).user?.role;
+  if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   dbService.createUser(req.body).then((u) => res.json(u)).catch((e) => res.status(400).json({ error: e?.message }));
 });
 
@@ -383,8 +401,8 @@ app.post('/api/system/read-only-token/regenerate', authMiddleware, (req, res) =>
 });
 
 // ---------- SPARING ----------
-app.get('/api/sparing/config', authMiddleware, (req, res) => res.json(sparingService.getSparingConfig()));
-app.post('/api/sparing/config', authMiddleware, (req, res) => {
+app.get('/api/sparing/config', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getSparingConfig()));
+app.post('/api/sparing/config', authMiddleware, sparingRoleMiddleware, (req, res) => {
   const updated = sparingService.upsertSparingConfig(req.body);
   const needsRestart = req.body?.enabled !== undefined || req.body?.sendMode !== undefined || req.body?.retryIntervalMinutes !== undefined;
   if (needsRestart) {
@@ -394,21 +412,21 @@ app.post('/api/sparing/config', authMiddleware, (req, res) => {
   }
   res.json(updated);
 });
-app.post('/api/sparing/fetch-api-secret', authMiddleware, (req, res) => {
+app.post('/api/sparing/fetch-api-secret', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.fetchApiSecret().then((r) => res.json(r)).catch((e) => res.status(400).json({ error: e?.message }));
 });
-app.get('/api/sparing/mappings', authMiddleware, (req, res) => res.json(sparingService.getSparingMappings()));
-app.post('/api/sparing/mappings', authMiddleware, (req, res) => {
+app.get('/api/sparing/mappings', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getSparingMappings()));
+app.post('/api/sparing/mappings', authMiddleware, sparingRoleMiddleware, (req, res) => {
   const { sparingParam, mappingId } = req.body || {};
   sparingService.upsertSparingMapping(sparingParam, mappingId);
   res.json({ ok: true });
 });
-app.delete('/api/sparing/mappings/:id', authMiddleware, (req, res) => {
+app.delete('/api/sparing/mappings/:id', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.deleteSparingMapping(req.params.id);
   res.json({ ok: true });
 });
-app.get('/api/sparing/logs', authMiddleware, (req, res) => res.json(sparingService.getSparingLogs(Number(req.query.limit) || 50)));
-app.get('/api/sparing/export-log', authMiddleware, (req, res) => {
+app.get('/api/sparing/logs', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getSparingLogs(Number(req.query.limit) || 50)));
+app.get('/api/sparing/export-log', authMiddleware, sparingRoleMiddleware, (req, res) => {
   try {
     const date = typeof req.query.date === 'string' ? req.query.date : undefined;
     const result = logger.readSparingLogForExport(date);
@@ -423,14 +441,14 @@ app.get('/api/sparing/export-log', authMiddleware, (req, res) => {
     return res.status(500).json({ error: e?.message || 'Failed to export SPARING log' });
   }
 });
-app.post('/api/sparing/process-queue', authMiddleware, (req, res) => {
+app.post('/api/sparing/process-queue', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.processQueue().then(() => res.json({ ok: true }));
 });
-app.get('/api/sparing/queue', authMiddleware, (req, res) => res.json(sparingService.getQueueItems(Number(req.query.limit) || 100)));
-app.post('/api/sparing/send-now', authMiddleware, (req, res) => {
+app.get('/api/sparing/queue', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getQueueItems(Number(req.query.limit) || 100)));
+app.post('/api/sparing/send-now', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.sendNow(req.body?.hourTimestamp).then(() => res.json({ ok: true })).catch((e) => res.status(400).json({ error: e?.message }));
 });
-app.get('/api/sparing/status', authMiddleware, (req, res) => {
+app.get('/api/sparing/status', authMiddleware, sparingRoleMiddleware, (req, res) => {
   const cfg = sparingService.getSparingConfig();
   return res.json({
     enabled: cfg?.enabled ?? false,
@@ -509,7 +527,8 @@ function parseReqUrl(req: any): { pathname: string; searchParams: URLSearchParam
 function canRealtimeFromJwt(token: string | null): boolean {
   if (!token) return false;
   const r = authService.verifyToken(token);
-  return !!r.valid;
+  if (!r.valid) return false;
+  return (r.user as any)?.role !== 'guest';
 }
 
 function canRealtimeFromReadOnly(ro: string | null): boolean {
@@ -584,7 +603,10 @@ server.on('upgrade', (req, socket, head) => {
       publicWsClients.forEach((ws) => wsSendSafe(ws, payload));
       return;
     }
-    wsClients.forEach((ws) => wsSendSafe(ws, payload));
+    // For non-public dashboard clients, only deliver when the WS is authenticated for this channel.
+    wsClients.forEach((ws) => {
+      if ((ws as any).canRealtime) wsSendSafe(ws, payload);
+    });
   };
 
   modbusService.on('data', (data: any) => {

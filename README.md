@@ -95,7 +95,7 @@ Preload script is built to `dist-electron/preload.js` and loaded at runtime via 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **Roles:** `admin` and `viewer`. SPARING menu and route are admin-only.
+- **Roles:** `admin`, `viewer`, and `guest`. SPARING menu/route are available for `admin` + `guest`; `guest` is restricted to SPARING only.
 - **Types:** See `docs/TYPES.md` for where API and entity types are defined.
 
 ## Tests

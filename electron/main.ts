@@ -272,7 +272,7 @@ function setupIpcHandlers() {
       setStoredSession({
         token: result.token,
         username: result.user.username,
-        role: result.user.role as 'admin' | 'viewer',
+        role: result.user.role as 'admin' | 'viewer' | 'guest',
       });
     }
     return result;

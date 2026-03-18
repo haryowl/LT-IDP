@@ -6,7 +6,7 @@ import { getLogger } from './logger';
 export interface StoredSession {
   token: string;
   username: string;
-  role: 'admin' | 'viewer';
+  role: 'admin' | 'viewer' | 'guest';
 }
 
 const SESSION_FILE = 'session.bin';
