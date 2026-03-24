@@ -565,10 +565,70 @@ export class HttpClientService extends EventEmitter {
     if (!intervalMs) return;
 
     const now = Date.now();
-    const from = this.db.getScheduledPublishCursor(publisherId) ?? (now - intervalMs);
-    const to = now;
+    const bucketTs = this.alignToBucket(now, intervalMs);
+    const from = this.db.getScheduledPublishCursor(publisherId) ?? (bucketTs - intervalMs);
+    const to = bucketTs;
+    if (to <= from) return;
 
     try {
+      // A) Realtime snapshot at this schedule bucket timestamp
+      const latestByMapping = this.db.getLatestHistoricalDataForMappings(publisher.mappingIds);
+      if (latestByMapping.size > 0) {
+        const mappings = this.db.getParameterMappings();
+        const mappingById = new Map(mappings.map((m) => [m.id, m]));
+        const snapshot: RealtimeData[] = [];
+        for (const [mappingId, row] of latestByMapping.entries()) {
+          const m = mappingById.get(mappingId);
+          if (!m) continue;
+          snapshot.push({
+            mappingId: row.mappingId,
+            mappingName: m.mappedName,
+            parameterId: m.parameterId,
+            value: row.value,
+            unit: m.unit,
+            timestamp: bucketTs,
+            quality: row.quality,
+          });
+        }
+        if (snapshot.length > 0) {
+          snapshot.sort((a, b) => a.mappingName.localeCompare(b.mappingName));
+          const latestData = snapshot[snapshot.length - 1];
+          let realtimePayload: any;
+          if (publisher.jsonFormat === 'custom' && publisher.customJsonTemplate) {
+            const context = this.buildTemplateContext(publisher, latestData, snapshot);
+            try {
+              realtimePayload = this.renderTemplate(publisher.customJsonTemplate, context);
+            } catch {
+              realtimePayload = this.applyLegacyTemplate(publisher.customJsonTemplate, context);
+            }
+          } else {
+            realtimePayload = {
+              batch: snapshot.map((data) => ({
+                name: data.mappingName,
+                parameterId: data.parameterId,
+                value: data.value,
+                unit: data.unit,
+                timestamp: bucketTs,
+                quality: data.quality,
+              })),
+              count: snapshot.length,
+              timestamp: bucketTs,
+              bucketTs,
+            };
+          }
+          await this.sendRequest(connection, realtimePayload);
+          this.emit('log', {
+            type: 'publisher',
+            level: 'info',
+            message: `Scheduled realtime snapshot: ${snapshot.length} items to ${publisher.httpUrl}`,
+            publisherId,
+            publisherName: publisher.name,
+            timestamp: Date.now(),
+            data: { itemCount: snapshot.length, url: publisher.httpUrl, bucketTs },
+          });
+        }
+      }
+
       const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), publisher.mappingIds);
       const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
       const mappings = this.db.getParameterMappings();
@@ -612,6 +672,11 @@ export class HttpClientService extends EventEmitter {
         return;
       }
 
+      // Normalize all payload timestamps to same interval bucket timestamp.
+      batch.forEach((d) => {
+        d.timestamp = bucketTs;
+      });
+
       batch.sort((a, b) => a.timestamp - b.timestamp);
       const latestData = batch[batch.length - 1];
       let payload: any;
@@ -629,11 +694,12 @@ export class HttpClientService extends EventEmitter {
             parameterId: data.parameterId,
             value: data.value,
             unit: data.unit,
-            timestamp: data.timestamp,
+            timestamp: bucketTs,
             quality: data.quality,
           })),
           count: batch.length,
-          timestamp: Date.now(),
+          timestamp: bucketTs,
+          bucketTs,
           from,
           to,
         };
@@ -646,11 +712,11 @@ export class HttpClientService extends EventEmitter {
       this.emit('log', {
         type: 'publisher',
         level: 'info',
-        message: `Scheduled publish: ${batch.length} items to ${publisher.httpUrl}`,
+        message: `Scheduled backlog window publish: ${batch.length} items to ${publisher.httpUrl}`,
         publisherId,
         publisherName: publisher.name,
         timestamp: Date.now(),
-        data: { itemCount: batch.length, url: publisher.httpUrl, from, to },
+        data: { itemCount: batch.length, url: publisher.httpUrl, from, to, bucketTs },
       });
     } catch (error: any) {
       this.emit('log', {
@@ -677,6 +743,11 @@ export class HttpClientService extends EventEmitter {
       default:
         return null;
     }
+  }
+
+  private alignToBucket(ts: number, intervalMs: number): number {
+    if (intervalMs <= 0) return ts;
+    return Math.floor(ts / intervalMs) * intervalMs;
   }
 }
 

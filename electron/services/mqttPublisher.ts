@@ -728,14 +728,54 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
-    log.info(`   ⏰ [MQTT PUBLISHER] "${publisher.name}" performing scheduled publish (window mode)`);
+    log.info(`   ⏰ [MQTT PUBLISHER] "${publisher.name}" performing scheduled publish (realtime + backlog window)`);
 
     try {
       const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
       if (!intervalMs) return;
       const now = Date.now();
-      const from = this.db.getScheduledPublishCursor(publisherId) ?? (now - intervalMs);
-      const to = now;
+      const bucketTs = this.alignToBucket(now, intervalMs);
+      const from = this.db.getScheduledPublishCursor(publisherId) ?? (bucketTs - intervalMs);
+      const to = bucketTs;
+      if (to <= from) {
+        // Already processed current bucket.
+        return;
+      }
+
+      // A) Realtime snapshot at this schedule bucket timestamp
+      const latestByMapping = this.db.getLatestHistoricalDataForMappings(publisher.mappingIds);
+      if (latestByMapping.size > 0) {
+        const mappings = this.db.getParameterMappings();
+        const mapById = new Map(mappings.map((m) => [m.id, m]));
+        const snapshotBatch: RealtimeData[] = [];
+        for (const [mappingId, row] of latestByMapping.entries()) {
+          const m = mapById.get(mappingId);
+          if (!m) continue;
+          snapshotBatch.push({
+            mappingId: row.mappingId,
+            mappingName: m.mappedName,
+            parameterId: m.parameterId,
+            value: row.value,
+            unit: m.unit,
+            timestamp: bucketTs,
+            quality: row.quality,
+          });
+        }
+        if (snapshotBatch.length > 0) {
+          const latestDataItem = snapshotBatch[snapshotBatch.length - 1];
+          const payload = this.formatPayload(publisher, latestDataItem, snapshotBatch, publisherId);
+          await this.sendMessage(connection, payload);
+          this.emit('log', {
+            type: 'publisher',
+            level: 'info',
+            message: `Scheduled realtime snapshot: ${snapshotBatch.length} mappings to topic "${publisher.mqttTopic}"`,
+            publisherId,
+            publisherName: publisher.name,
+            timestamp: Date.now(),
+            data: { mappingCount: snapshotBatch.length, topic: publisher.mqttTopic, bucketTs },
+          });
+        }
+      }
 
       const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), publisher.mappingIds);
       const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
@@ -781,12 +821,16 @@ export class MqttPublisherService extends EventEmitter {
         return;
       }
 
+      // Normalize all payload timestamps to the same interval bucket timestamp.
+      realtimeDataArray.forEach((d) => {
+        d.timestamp = bucketTs;
+      });
+
       realtimeDataArray.sort((a, b) => a.timestamp - b.timestamp);
       log.info(`   📊 [MQTT PUBLISHER] "${publisher.name}" window rows: ${realtimeDataArray.length} (${new Date(from).toISOString()} - ${new Date(to).toISOString()})`);
 
       // Use the latest timestamp as the "current" data for template context
-      const latestTimestamp = Math.max(...realtimeDataArray.map(d => d.timestamp));
-      const latestDataItem = realtimeDataArray.find(d => d.timestamp === latestTimestamp) || realtimeDataArray[0];
+      const latestDataItem = realtimeDataArray[realtimeDataArray.length - 1];
 
       // Format payload using all the data
       const payload = this.formatPayload(publisher, latestDataItem, realtimeDataArray, publisherId);
@@ -820,15 +864,16 @@ export class MqttPublisherService extends EventEmitter {
       this.emit('log', {
         type: 'publisher',
         level: 'info',
-        message: `Scheduled publish: ${realtimeDataArray.length} mappings to topic "${publisher.mqttTopic}"`,
+        message: `Scheduled backlog window publish: ${realtimeDataArray.length} rows to topic "${publisher.mqttTopic}"`,
         publisherId,
         publisherName: publisher.name,
         timestamp: Date.now(),
         data: {
-          mappingCount: realtimeDataArray.length,
+          rowCount: realtimeDataArray.length,
           topic: publisher.mqttTopic,
           from,
           to,
+          bucketTs,
         },
       });
     } catch (error: any) {
@@ -857,6 +902,11 @@ export class MqttPublisherService extends EventEmitter {
       default:
         return null;
     }
+  }
+
+  private alignToBucket(ts: number, intervalMs: number): number {
+    if (intervalMs <= 0) return ts;
+    return Math.floor(ts / intervalMs) * intervalMs;
   }
 
   refreshPublisher(publisherId: string): void {
