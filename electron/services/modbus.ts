@@ -29,12 +29,16 @@ interface ModbusConnection {
     lastError?: string;
     messagesReceived?: number;
     lastMessageTime?: number;
+    reconnectAttempts?: number;
+    reconnecting?: boolean;
+    lastReconnectAt?: number;
   };
   lastRecordedData: Map<string, { value: any; timestamp: number; quality: 'good' | 'bad' | 'uncertain'; registerName?: string }>;
 }
 
 export class ModbusService extends EventEmitter {
   private connections: Map<string, ModbusConnection> = new Map();
+  private reconnectStats: Map<string, { attempts: number; lastReconnectAt?: number }> = new Map();
 
   constructor(private db: DatabaseService) {
     super();
@@ -114,6 +118,9 @@ export class ModbusService extends EventEmitter {
           connected: true,
           lastConnected: Date.now(),
           messagesReceived: 0,
+          reconnectAttempts: this.reconnectStats.get(device.id)?.attempts || 0,
+          reconnecting: false,
+          lastReconnectAt: this.reconnectStats.get(device.id)?.lastReconnectAt,
         },
         lastRecordedData: new Map(),
       };
@@ -157,6 +164,7 @@ export class ModbusService extends EventEmitter {
     const onCloseOrError = () => {
       if (connection.reconnecting) return;
       connection.reconnecting = true;
+      connection.status.reconnecting = true;
       console.log(`Modbus device ${connection.device.name}: connection lost (close/error), reconnecting...`);
       this.reconnect(deviceId);
     };
@@ -591,6 +599,12 @@ export class ModbusService extends EventEmitter {
       return;
     }
     connection.reconnecting = true;
+    connection.status.reconnecting = true;
+    const prev = this.reconnectStats.get(deviceId) || { attempts: 0 };
+    const next = { attempts: prev.attempts + 1, lastReconnectAt: Date.now() };
+    this.reconnectStats.set(deviceId, next);
+    connection.status.reconnectAttempts = next.attempts;
+    connection.status.lastReconnectAt = next.lastReconnectAt;
 
     await this.disconnect(deviceId);
     this.scheduleReconnect(deviceId, RECONNECT_DELAY_MS);
