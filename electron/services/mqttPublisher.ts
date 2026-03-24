@@ -699,20 +699,10 @@ export class MqttPublisherService extends EventEmitter {
     }
 
     // Calculate interval in milliseconds
-    let intervalMs: number;
-    switch (publisher.scheduledIntervalUnit) {
-      case 'seconds':
-        intervalMs = publisher.scheduledInterval * 1000;
-        break;
-      case 'minutes':
-        intervalMs = publisher.scheduledInterval * 60 * 1000;
-        break;
-      case 'hours':
-        intervalMs = publisher.scheduledInterval * 60 * 60 * 1000;
-        break;
-      default:
-        log.error(`Invalid scheduled interval unit: ${publisher.scheduledIntervalUnit}`);
-        return;
+    const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+    if (!intervalMs) {
+      log.error(`Invalid scheduled interval unit: ${publisher.scheduledIntervalUnit}`);
+      return;
     }
 
     log.info(`⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled publishing started: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit}`);
@@ -738,42 +728,61 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
-    log.info(`   ⏰ [MQTT PUBLISHER] "${publisher.name}" performing scheduled publish from historical database`);
+    log.info(`   ⏰ [MQTT PUBLISHER] "${publisher.name}" performing scheduled publish (window mode)`);
 
     try {
-      // Get latest values from historical database for all configured mappings
-      const latestData = this.db.getLatestHistoricalDataForMappings(publisher.mappingIds);
-      
-      if (latestData.size === 0) {
-        log.info(`   ⚠️  [MQTT PUBLISHER] "${publisher.name}" no historical data found for scheduled publish`);
-        return;
-      }
+      const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+      if (!intervalMs) return;
+      const now = Date.now();
+      const from = this.db.getScheduledPublishCursor(publisherId) ?? (now - intervalMs);
+      const to = now;
 
-      // Convert historical data to RealtimeData format
+      const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), publisher.mappingIds);
+      const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
+
       const mappings = this.db.getParameterMappings();
+      const mappingById = new Map(mappings.map((m) => [m.id, m]));
       const realtimeDataArray: RealtimeData[] = [];
 
-      for (const [mappingId, historicalData] of latestData.entries()) {
-        const mapping = mappings.find(m => m.id === mappingId);
-        if (mapping) {
-          realtimeDataArray.push({
-            mappingId: historicalData.mappingId,
-            mappingName: mapping.mappedName,
-            parameterId: mapping.parameterId,
-            value: historicalData.value,
-            unit: mapping.unit,
-            timestamp: historicalData.timestamp,
-            quality: historicalData.quality,
-          });
-        }
+      for (const row of historicalRows) {
+        const mapping = mappingById.get(row.mappingId);
+        if (!mapping) continue;
+        realtimeDataArray.push({
+          mappingId: row.mappingId,
+          mappingName: mapping.mappedName,
+          parameterId: mapping.parameterId,
+          value: row.value,
+          unit: mapping.unit,
+          timestamp: row.timestamp,
+          quality: row.quality,
+        });
+      }
+      for (const item of bufferItems) {
+        const d = item.data as RealtimeData;
+        if (!publisher.mappingIds.includes(d.mappingId)) continue;
+        realtimeDataArray.push(d);
       }
 
+      // Deduplicate overlap between historical rows and buffer queue entries.
+      const seen = new Set<string>();
+      const deduped: RealtimeData[] = [];
+      for (const d of realtimeDataArray) {
+        const key = `${d.mappingId}|${d.timestamp}|${JSON.stringify(d.value)}|${d.quality}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(d);
+      }
+      realtimeDataArray.length = 0;
+      realtimeDataArray.push(...deduped);
+
       if (realtimeDataArray.length === 0) {
-        log.info(`   ⚠️  [MQTT PUBLISHER] "${publisher.name}" no valid mappings found for scheduled publish`);
+        log.info(`   ⚠️  [MQTT PUBLISHER] "${publisher.name}" no data found for window ${new Date(from).toISOString()} - ${new Date(to).toISOString()}`);
+        this.db.setScheduledPublishCursor(publisherId, to);
         return;
       }
 
-      log.info(`   📊 [MQTT PUBLISHER] "${publisher.name}" found ${realtimeDataArray.length} mappings from database`);
+      realtimeDataArray.sort((a, b) => a.timestamp - b.timestamp);
+      log.info(`   📊 [MQTT PUBLISHER] "${publisher.name}" window rows: ${realtimeDataArray.length} (${new Date(from).toISOString()} - ${new Date(to).toISOString()})`);
 
       // Use the latest timestamp as the "current" data for template context
       const latestTimestamp = Math.max(...realtimeDataArray.map(d => d.timestamp));
@@ -797,15 +806,16 @@ export class MqttPublisherService extends EventEmitter {
       await this.sendMessage(connection, payload);
       log.info(`   ✅ [MQTT PUBLISHER] "${publisher.name}" SUCCESSFULLY PUBLISHED scheduled data (${realtimeDataArray.length} mappings)`);
 
-      // Reconcile buffer queue: mark pending items up to the latest timestamp as sent
+      // Reconcile buffer queue only for the sent window [from, to)
       try {
-        const cleared = this.db.markBufferItemsSentUpTo(publisherId, latestTimestamp);
+        const cleared = this.db.markBufferItemsSentInRange(publisherId, from, to);
         if (cleared > 0) {
-          log.info(`   🧹 [MQTT PUBLISHER] "${publisher.name}" reconciled buffer queue: marked ${cleared} items as sent (<= ${new Date(latestTimestamp).toISOString()})`);
+          log.info(`   🧹 [MQTT PUBLISHER] "${publisher.name}" reconciled buffer queue: marked ${cleared} items as sent in window`);
         }
       } catch (err: any) {
         log.warn(`   ⚠️  [MQTT PUBLISHER] Buffer reconciliation warning: ${err.message}`);
       }
+      this.db.setScheduledPublishCursor(publisherId, to);
 
       this.emit('log', {
         type: 'publisher',
@@ -817,6 +827,8 @@ export class MqttPublisherService extends EventEmitter {
         data: {
           mappingCount: realtimeDataArray.length,
           topic: publisher.mqttTopic,
+          from,
+          to,
         },
       });
     } catch (error: any) {
@@ -830,6 +842,20 @@ export class MqttPublisherService extends EventEmitter {
         timestamp: Date.now(),
         error: error.message,
       });
+    }
+  }
+
+  private getScheduledIntervalMs(interval?: number, unit?: 'seconds' | 'minutes' | 'hours'): number | null {
+    if (!interval || interval <= 0 || !unit) return null;
+    switch (unit) {
+      case 'seconds':
+        return interval * 1000;
+      case 'minutes':
+        return interval * 60 * 1000;
+      case 'hours':
+        return interval * 60 * 60 * 1000;
+      default:
+        return null;
     }
   }
 

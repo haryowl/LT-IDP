@@ -1632,6 +1632,28 @@ export class DatabaseService {
     }));
   }
 
+  getPendingBufferItemsInWindow(publisherId: string, fromTimestamp: number, toTimestampExclusive: number, limit: number): BufferItem[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM buffer_queue 
+        WHERE publisher_id = ? AND status = 'pending' AND timestamp >= ? AND timestamp < ?
+        ORDER BY timestamp ASC
+        LIMIT ?
+      `
+      )
+      .all(publisherId, fromTimestamp, toTimestampExclusive, limit);
+    return rows.map((row: any) => ({
+      id: row.id,
+      publisherId: row.publisher_id,
+      data: JSON.parse(row.data),
+      timestamp: row.timestamp,
+      attempts: row.attempts,
+      lastAttempt: row.last_attempt,
+      status: row.status,
+    }));
+  }
+
   updateBufferItemStatus(id: string, status: 'pending' | 'failed' | 'sent', attempts: number): void {
     this.db.prepare('UPDATE buffer_queue SET status = ?, attempts = ?, last_attempt = ? WHERE id = ?').run(status, attempts, Date.now(), id);
   }
@@ -1652,6 +1674,28 @@ export class DatabaseService {
     `);
     const info = stmt.run(Date.now(), publisherId, upToTimestamp);
     return info.changes as number;
+  }
+
+  markBufferItemsSentInRange(publisherId: string, fromTimestamp: number, toTimestampExclusive: number): number {
+    const stmt = this.db.prepare(`
+      UPDATE buffer_queue
+      SET status = 'sent', last_attempt = ?, attempts = attempts + 1
+      WHERE publisher_id = ? AND status = 'pending' AND timestamp >= ? AND timestamp < ?
+    `);
+    const info = stmt.run(Date.now(), publisherId, fromTimestamp, toTimestampExclusive);
+    return info.changes as number;
+  }
+
+  getScheduledPublishCursor(publisherId: string): number | undefined {
+    const raw = this.getSystemConfig(`scheduledCursor:${publisherId}`);
+    if (!raw) return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return undefined;
+    return Math.floor(n);
+  }
+
+  setScheduledPublishCursor(publisherId: string, cursorTimestamp: number): void {
+    this.setSystemConfig(`scheduledCursor:${publisherId}`, String(Math.floor(cursorTimestamp)));
   }
 
   // Helper methods
