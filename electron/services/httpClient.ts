@@ -559,20 +559,23 @@ export class HttpClientService extends EventEmitter {
     const connection = this.connections.get(publisherId);
     if (!connection) return;
     const publisher = connection.publisher;
-    if (!publisher.scheduledEnabled || publisher.mappingIds.length === 0) return;
+    if (!publisher.scheduledEnabled) return;
+
+    const mappingsList = this.db.getParameterMappings();
+    const effectiveMappingIds =
+      publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
+    if (effectiveMappingIds.length === 0) return;
 
     const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) return;
 
-    const now = Date.now();
-    const bucketTs = this.alignToBucket(now, intervalMs);
-    const from = this.db.getScheduledPublishCursor(publisherId) ?? (bucketTs - intervalMs);
-    const to = bucketTs;
-    if (to <= from) return;
+    const window = this.computeScheduledPublishWindow(publisherId, intervalMs);
+    if (!window) return;
+    const { from, to, bucketTs } = window;
 
     try {
       // A) Realtime snapshot at this schedule bucket timestamp
-      const latestByMapping = this.db.getLatestHistoricalDataForMappings(publisher.mappingIds);
+      const latestByMapping = this.db.getLatestHistoricalDataForMappings(effectiveMappingIds);
       if (latestByMapping.size > 0) {
         const mappings = this.db.getParameterMappings();
         const mappingById = new Map(mappings.map((m) => [m.id, m]));
@@ -629,7 +632,7 @@ export class HttpClientService extends EventEmitter {
         }
       }
 
-      const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), publisher.mappingIds);
+      const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), effectiveMappingIds);
       const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
       const mappings = this.db.getParameterMappings();
       const mappingById = new Map(mappings.map((m) => [m.id, m]));
@@ -650,7 +653,7 @@ export class HttpClientService extends EventEmitter {
       }
       for (const item of bufferItems) {
         const d = item.data as RealtimeData;
-        if (!publisher.mappingIds.includes(d.mappingId)) continue;
+        if (publisher.mappingIds.length > 0 && !publisher.mappingIds.includes(d.mappingId)) continue;
         batch.push(d);
       }
 
@@ -745,9 +748,20 @@ export class HttpClientService extends EventEmitter {
     }
   }
 
-  private alignToBucket(ts: number, intervalMs: number): number {
-    if (intervalMs <= 0) return ts;
-    return Math.floor(ts / intervalMs) * intervalMs;
+  /** See mqttPublisher: epoch-aligned window with exclusive end `to` as bucket timestamp. */
+  private computeScheduledPublishWindow(
+    publisherId: string,
+    intervalMs: number
+  ): { from: number; to: number; bucketTs: number } | null {
+    if (intervalMs <= 0) return null;
+    const now = Date.now();
+    let to = Math.ceil(now / intervalMs) * intervalMs;
+    const cursor = this.db.getScheduledPublishCursor(publisherId);
+    const from = cursor !== undefined ? cursor : to - intervalMs;
+    while (to <= from) {
+      to += intervalMs;
+    }
+    return { from, to, bucketTs: to };
   }
 }
 

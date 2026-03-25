@@ -1690,7 +1690,8 @@ export class DatabaseService {
     const raw = this.getSystemConfig(`scheduledCursor:${publisherId}`);
     if (!raw) return undefined;
     const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) return undefined;
+    // 0 is a valid cursor (epoch-aligned window boundary)
+    if (!Number.isFinite(n) || n < 0) return undefined;
     return Math.floor(n);
   }
 
