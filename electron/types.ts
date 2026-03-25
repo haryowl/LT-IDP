@@ -74,6 +74,7 @@ export interface ParameterMapping {
   parameterId?: string;
   description?: string;
   sourceType: 'modbus' | 'mqtt' | 'system';
+  /** Modbus device id, MQTT device id, or system key (e.g. system-timestamp, system-sparing-success-count). */
   sourceDeviceId: string;
   registerId?: string;
   topic?: string;

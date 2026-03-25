@@ -4,6 +4,7 @@ import https from 'https';
 import { URL } from 'url';
 import type { DatabaseService } from './database';
 import { getLogger } from './logger';
+import { getTransmissionTelemetry } from './transmissionTelemetry';
 import type {
   SparingConfig,
   SparingMapping,
@@ -866,6 +867,12 @@ export class SparingService {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(id, sendType, hourTimestamp || null, recordsCount, status, response, durationMs, now);
+
+    try {
+      getTransmissionTelemetry().recordSparing(status);
+    } catch {
+      // ignore telemetry errors
+    }
 
     try {
       this.sendLoggedCallback?.({

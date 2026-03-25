@@ -26,6 +26,7 @@ import {
   TableRow,
   TextField,
   Typography,
+  ListItemText,
 } from '@mui/material';
 import api from '../api/client';
 import {
@@ -34,6 +35,60 @@ import {
   Delete as DeleteIcon,
   Help as HelpIcon,
 } from '@mui/icons-material';
+
+/** Value = stored `dataType`; label + description shown in the Data Type dropdown */
+const DATA_TYPE_OPTIONS: { value: string; label: string; description: string }[] = [
+  {
+    value: 'int16',
+    label: 'int16 (signed 16-bit integer)',
+    description: 'Whole numbers, typical Modbus register width. Range about −32,768 … 32,767.',
+  },
+  {
+    value: 'int32',
+    label: 'int32 (signed 32-bit integer)',
+    description: 'Whole numbers with a large signed range.',
+  },
+  {
+    value: 'uint16',
+    label: 'uint16 (unsigned 16-bit integer)',
+    description: 'Whole numbers 0 … 65,535; common for Modbus.',
+  },
+  {
+    value: 'uint32',
+    label: 'uint32 (unsigned 32-bit integer)',
+    description: 'Large positive whole numbers.',
+  },
+  {
+    value: 'float32',
+    label: 'float32 (single-precision decimal)',
+    description: 'Fractional values; typical default for sensors and analogs.',
+  },
+  {
+    value: 'float64',
+    label: 'float64 (double-precision decimal)',
+    description: 'Fractional values with higher precision.',
+  },
+  {
+    value: 'number',
+    label: 'number (generic numeric)',
+    description: 'Any numeric value; input is converted with JavaScript Number().',
+  },
+  {
+    value: 'boolean',
+    label: 'boolean',
+    description: 'Logical true / false.',
+  },
+  {
+    value: 'string',
+    label: 'string',
+    description: 'Text.',
+  },
+  {
+    value: 'timestamp',
+    label: 'timestamp',
+    description: 'Date/time string; set input/output format and timezone below.',
+  },
+];
 
 interface ParameterMapping {
   id: string;
@@ -91,10 +146,54 @@ const ParameterMappings: React.FC = () => {
   
   const [showTransformHelp, setShowTransformHelp] = useState(false);
   const [showJsonPathHelp, setShowJsonPathHelp] = useState(false);
+  /** IDs must match `SYSTEM_TELEMETRY_SOURCE_IDS` in electron/services/transmissionTelemetry.ts */
   const systemSources = useMemo(
     () => [
-      { id: 'system-timestamp', label: 'System Timestamp' },
-      { id: 'system-clientId', label: 'System Client ID' },
+      {
+        id: 'system-timestamp',
+        label: 'Current time (updates every second)',
+        description: 'Unix time or formatted clock; choose Data type “timestamp” and formats below.',
+      },
+      {
+        id: 'system-clientId',
+        label: 'This app’s Client ID',
+        description: 'Same ID as in Settings; use Data type “string”.',
+      },
+      {
+        id: 'system-sparing-success-count',
+        label: 'SPARING — success send count',
+        description: 'Total successful SPARING API sends since app start. Data type: number (generic numeric) or uint32.',
+      },
+      {
+        id: 'system-sparing-fail-count',
+        label: 'SPARING — failed send count',
+        description: 'Total failed SPARING sends since app start. Data type: number.',
+      },
+      {
+        id: 'system-sparing-queue-depth',
+        label: 'SPARING — pending retry queue size',
+        description: 'Number of rows waiting in the SPARING retry queue (live from database). Data type: number.',
+      },
+      {
+        id: 'system-mqtt-success-count',
+        label: 'MQTT publisher — successful publishes',
+        description: 'Total successful MQTT publish operations (all publishers) since app start. Data type: number.',
+      },
+      {
+        id: 'system-mqtt-fail-count',
+        label: 'MQTT publisher — failed publishes',
+        description: 'Total failed MQTT publish attempts since app start. Data type: number.',
+      },
+      {
+        id: 'system-http-success-count',
+        label: 'HTTP publisher — successful requests',
+        description: 'Total successful HTTP publisher requests (all publishers) since app start. Data type: number.',
+      },
+      {
+        id: 'system-http-fail-count',
+        label: 'HTTP publisher — failed requests',
+        description: 'Total failed HTTP publisher requests since app start. Data type: number.',
+      },
     ],
     []
   );
@@ -378,15 +477,25 @@ const ParameterMappings: React.FC = () => {
             </TextField>
             {formData.sourceType === 'system' && (
               <TextField
-                label="System Source"
+                label="System source"
                 select
                 value={formData.sourceDeviceId || 'system-timestamp'}
-                onChange={(e) => setFormData({ ...formData, sourceDeviceId: e.target.value })}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  const isTelemetryCounter =
+                    id.startsWith('system-sparing-') || id.startsWith('system-mqtt-') || id.startsWith('system-http-');
+                  setFormData((prev) => ({
+                    ...prev,
+                    sourceDeviceId: id,
+                    ...(isTelemetryCounter ? { dataType: 'number' as const } : {}),
+                  }));
+                }}
                 fullWidth
+                helperText="Built-in values from this application (not from Modbus or MQTT). Transmission counters reset when the app restarts; queue depth is live from the database."
               >
                 {systemSources.map((source) => (
-                  <MenuItem key={source.id} value={source.id}>
-                    {source.label}
+                  <MenuItem key={source.id} value={source.id} sx={{ alignItems: 'flex-start', py: 1 }}>
+                    <ListItemText primary={source.label} secondary={source.description} />
                   </MenuItem>
                 ))}
               </TextField>
@@ -494,21 +603,26 @@ const ParameterMappings: React.FC = () => {
               required
             />
             <TextField
-              label="Data Type"
+              label="Data type"
               select
               value={formData.dataType}
               onChange={(e) => setFormData({ ...formData, dataType: e.target.value })}
               fullWidth
+              helperText="What kind of value this parameter holds. Use integer types for typical Modbus counts; float for analogs; timestamp for clocks. Use “Transform” below to scale or convert."
             >
-              <MenuItem value="int16">int16</MenuItem>
-              <MenuItem value="int32">int32</MenuItem>
-              <MenuItem value="uint16">uint16</MenuItem>
-              <MenuItem value="uint32">uint32</MenuItem>
-              <MenuItem value="float32">float32</MenuItem>
-              <MenuItem value="float64">float64</MenuItem>
-              <MenuItem value="boolean">boolean</MenuItem>
-              <MenuItem value="string">string</MenuItem>
-              <MenuItem value="timestamp">timestamp</MenuItem>
+              {!DATA_TYPE_OPTIONS.some((o) => o.value === formData.dataType) && formData.dataType ? (
+                <MenuItem value={formData.dataType} sx={{ alignItems: 'flex-start', py: 1 }}>
+                  <ListItemText
+                    primary={`${formData.dataType} (saved in database)`}
+                    secondary="This value is not in the standard list. You can keep it or pick a standard type above."
+                  />
+                </MenuItem>
+              ) : null}
+              {DATA_TYPE_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value} sx={{ alignItems: 'flex-start', py: 1 }}>
+                  <ListItemText primary={opt.label} secondary={opt.description} />
+                </MenuItem>
+              ))}
             </TextField>
             <TextField
               label="Unit"

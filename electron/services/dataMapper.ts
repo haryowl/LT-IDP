@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import type { DatabaseService } from './database';
 import type { ParameterMapping, RealtimeData } from '../types';
 import { getLogger } from './logger';
+import { getTransmissionTelemetry, SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
 
 export class DataMapperService extends EventEmitter {
   private mappings: Map<string, ParameterMapping> = new Map();
@@ -407,10 +408,35 @@ export class DataMapperService extends EventEmitter {
       return;
     }
 
+    const tel = getTransmissionTelemetry();
+
     for (const mapping of systemMappings) {
       const now = Date.now();
       const sourceId = mapping.sourceDeviceId || 'system-timestamp';
-      const value = sourceId === 'system-timestamp' ? now : clientId;
+
+      let value: string | number;
+      if (sourceId === 'system-timestamp') {
+        value = now;
+      } else if (sourceId === 'system-clientId') {
+        value = clientId;
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_SUCCESS) {
+        value = tel.getSparingSuccess();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_FAIL) {
+        value = tel.getSparingFail();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_QUEUE) {
+        value = this.db.getSparingPendingQueueCount();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.MQTT_SUCCESS) {
+        value = tel.getMqttSuccess();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.MQTT_FAIL) {
+        value = tel.getMqttFail();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.HTTP_SUCCESS) {
+        value = tel.getHttpSuccess();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.HTTP_FAIL) {
+        value = tel.getHttpFail();
+      } else {
+        getLogger().warn(`Unknown system source_device_id: ${sourceId}, skipping mapping ${mapping.name}`);
+        continue;
+      }
 
       const mappedData = await this.transformData(mapping, value, now, 'good');
       if (mappedData) {

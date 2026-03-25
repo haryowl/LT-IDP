@@ -1498,6 +1498,14 @@ export class DatabaseService {
     return { path: exportPath };
   }
 
+  /** Pending SPARING retry queue rows (matches SparingService.getQueueDepth). */
+  getSparingPendingQueueCount(): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) as cnt FROM sparing_queue WHERE status = 'pending'`)
+      .get() as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
+  }
+
   // Publisher operations
   getPublishers(): Publisher[] {
     const rows = this.db.prepare('SELECT * FROM publishers ORDER BY created_at DESC').all();

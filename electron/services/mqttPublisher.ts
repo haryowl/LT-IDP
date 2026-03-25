@@ -4,6 +4,7 @@ import type { DatabaseService } from './database';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import { getLogger } from './logger';
+import { getTransmissionTelemetry } from './transmissionTelemetry';
 
 const log = getLogger();
 
@@ -501,28 +502,34 @@ export class MqttPublisherService extends EventEmitter {
   }
 
   private async sendMessage(connection: PublisherConnection, payload: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!connection.client.connected) {
-        reject(new Error('MQTT client not connected'));
-        return;
-      }
-
-      connection.client.publish(
-        connection.publisher.mqttTopic!,
-        payload,
-        {
-          qos: (connection.publisher.mqttQos || 0) as any,
-          retain: false,
-        },
-        (error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (!connection.client.connected) {
+          reject(new Error('MQTT client not connected'));
+          return;
         }
-      );
-    });
+
+        connection.client.publish(
+          connection.publisher.mqttTopic!,
+          payload,
+          {
+            qos: (connection.publisher.mqttQos || 0) as any,
+            retain: false,
+          },
+          (error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          }
+        );
+      });
+      getTransmissionTelemetry().recordMqtt(true);
+    } catch (e) {
+      getTransmissionTelemetry().recordMqtt(false);
+      throw e;
+    }
   }
 
   private async flushBuffer(publisherId: string): Promise<void> {

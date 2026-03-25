@@ -3,6 +3,7 @@ import https from 'https';
 import { EventEmitter } from 'events';
 import type { DatabaseService } from './database';
 import type { Publisher, RealtimeData } from '../types';
+import { getTransmissionTelemetry } from './transmissionTelemetry';
 
 interface HttpClientConnection {
   publisher: Publisher;
@@ -132,7 +133,9 @@ export class HttpClientService extends EventEmitter {
       } else {
         throw new Error(`HTTP method ${method} is not supported`);
       }
+      getTransmissionTelemetry().recordHttp(true);
     } catch (error: any) {
+      getTransmissionTelemetry().recordHttp(false);
       console.error(`HTTP request error:`, error.message);
       throw error;
     }
