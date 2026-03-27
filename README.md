@@ -14,8 +14,10 @@ A cross-platform **desktop (Electron)** or **web** application for industrial Io
 
 ## Prerequisites
 
-- Node.js 18+ (LTS recommended)
+- **Node.js 18, 20, or 22 (LTS).** Avoid **Node 24+** for now: native addons such as `better-sqlite3` often have no prebuilt binary for very new Node versions, and compiling from source against Node 24’s V8 fails with the current stack.
 - npm or yarn
+
+If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm install` in the repo root (see `.nvmrc`, e.g. Node 22).
 
 ## Setup
 
@@ -24,6 +26,14 @@ npm install
 ```
 
 For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) or Visual Studio Build Tools.
+
+### Linux (Ubuntu): `better-sqlite3` / `node-gyp` errors
+
+1. Install compilers: `sudo apt install -y build-essential python3`
+2. Switch to **Node 20 or 22 LTS** (not 24), e.g. `nvm install 22 && nvm use 22`
+3. Clean and reinstall: `rm -rf node_modules && npm install`
+
+`package.json` includes an `engines.node` range; npm may warn if Node is outside that range.
 
 ## Run (development)
 
