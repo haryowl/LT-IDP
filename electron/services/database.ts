@@ -585,6 +585,17 @@ export class DatabaseService {
       }
     }
 
+    try {
+      this.db.exec(`ALTER TABLE sparing_config ADD COLUMN retry_all_failed_on_reconnect INTEGER DEFAULT 0`);
+    } catch (error: any) {
+      if (!error.message?.includes('duplicate column name')) {
+        console.warn(
+          'Database migration warning (sparing_config.retry_all_failed_on_reconnect):',
+          error.message
+        );
+      }
+    }
+
     // Threshold publish rules: watched devices for connection alerts
     try {
       this.db.exec(`ALTER TABLE threshold_publish_rules ADD COLUMN watched_devices TEXT`);

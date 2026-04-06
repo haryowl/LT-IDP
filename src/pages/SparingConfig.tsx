@@ -43,6 +43,10 @@ interface SparingConfig {
   enabled: boolean;
   sendMode: 'hourly' | '2min' | 'both';
   lastHourlySend?: number;
+  retryMaxAttempts?: number;
+  retryIntervalMinutes?: number;
+  /** When SPARING host answers again, re-queue every failed row (not only network errors). */
+  retryAllFailedOnReconnect?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -547,6 +551,27 @@ const SparingConfig: React.FC = () => {
                 fullWidth
                 helperText="Interval between retry attempts in minutes (default: 5)"
               />
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(config?.retryAllFailedOnReconnect)}
+                    onChange={(e) => {
+                      if (config) {
+                        handleUpdateConfig({ retryAllFailedOnReconnect: e.target.checked });
+                      }
+                    }}
+                    disabled={loading}
+                  />
+                }
+                label="Re-queue all failed items when SPARING is reachable again"
+              />
+              <Typography variant="body2" color="textSecondary" sx={{ ml: 4, mt: 0.5 }}>
+                Default off: only rows with network-style errors (timeouts, DNS, connection refused, etc.)
+                are reset for retry. When on, every permanently failed row is reset when the API host responds
+                again—useful after outages; may retry non-network errors (e.g. bad payload) too.
+              </Typography>
             </Grid>
             {config?.apiSecretFetchedAt && (
               <Grid item xs={12}>

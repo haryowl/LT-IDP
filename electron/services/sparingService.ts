@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
+import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import type { DatabaseService } from './database';
@@ -71,6 +72,7 @@ export class SparingService {
       last2MinSend: row.last_2min_send,
       retryMaxAttempts: row.retry_max_attempts || undefined,
       retryIntervalMinutes: row.retry_interval_minutes || undefined,
+      retryAllFailedOnReconnect: Boolean(row.retry_all_failed_on_reconnect),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -94,7 +96,7 @@ export class SparingService {
            SET logger_id = ?, api_secret = ?, api_secret_fetched_at = ?, 
                enabled = ?, send_mode = ?, last_hourly_send = ?, last_2min_send = ?, api_base = ?, 
                api_secret_url = ?, api_send_hourly_url = ?, api_send_2min_url = ?, api_testing_url = ?, 
-               retry_max_attempts = ?, retry_interval_minutes = ?, updated_at = ?
+               retry_max_attempts = ?, retry_interval_minutes = ?, retry_all_failed_on_reconnect = ?, updated_at = ?
            WHERE id = ?`
         )
         .run(
@@ -112,6 +114,7 @@ export class SparingService {
           updated.apiTestingUrl || null,
           updated.retryMaxAttempts || null,
           updated.retryIntervalMinutes || null,
+          updated.retryAllFailedOnReconnect ? 1 : 0,
           updated.updatedAt,
           updated.id
         );
@@ -126,6 +129,7 @@ export class SparingService {
         enabled: config.enabled || false,
         sendMode: config.sendMode || 'hourly',
         lastHourlySend: config.lastHourlySend,
+        retryAllFailedOnReconnect: config.retryAllFailedOnReconnect ?? false,
         createdAt: now,
         updatedAt: now,
       };
@@ -134,8 +138,8 @@ export class SparingService {
         .getDb()
         .prepare(
           `INSERT INTO sparing_config 
-           (id, logger_id, api_secret, api_secret_fetched_at, enabled, send_mode, last_hourly_send, last_2min_send, api_base, api_secret_url, api_send_hourly_url, api_send_2min_url, api_testing_url, retry_max_attempts, retry_interval_minutes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, logger_id, api_secret, api_secret_fetched_at, enabled, send_mode, last_hourly_send, last_2min_send, api_base, api_secret_url, api_send_hourly_url, api_send_2min_url, api_testing_url, retry_max_attempts, retry_interval_minutes, retry_all_failed_on_reconnect, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           newConfig.id,
@@ -153,6 +157,7 @@ export class SparingService {
           newConfig.apiTestingUrl || null,
           newConfig.retryMaxAttempts || null,
           newConfig.retryIntervalMinutes || null,
+          newConfig.retryAllFailedOnReconnect ? 1 : 0,
           newConfig.createdAt,
           newConfig.updatedAt
         );
@@ -685,6 +690,106 @@ export class SparingService {
   // ============================================================================
   // QUEUE MANAGEMENT
   // ============================================================================
+  /** True when error text looks like a transport/DNS/offline issue (safe to retry after reconnect). */
+  private isLikelyTransientNetworkError(message: string): boolean {
+    if (!message || typeof message !== 'string') return false;
+    const m = message.toLowerCase();
+    const hints = [
+      'econnrefused',
+      'etimedout',
+      'enotfound',
+      'econnreset',
+      'eai_again',
+      'enetunreach',
+      'ehostunreach',
+      'socket hang up',
+      'socket hangup',
+      'network',
+      'getaddrinfo',
+      'fetch failed',
+      'failed to fetch',
+      'read econnreset',
+      'write econnreset',
+      'epipe',
+      'ecanceled',
+      'timeout',
+      'offline',
+      'no internet',
+      'enotconnected',
+    ];
+    return hints.some((h) => m.includes(h));
+  }
+
+  /** Quick reachability check to SPARING API host (any HTTP response counts as reachable). */
+  private probeHttpOriginReachable(originUrl: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      try {
+        const u = new URL(originUrl);
+        const isHttp = u.protocol === 'http:';
+        const mod = isHttp ? http : https;
+        const port = u.port ? Number(u.port) : isHttp ? 80 : 443;
+        const req = mod.request(
+          {
+            hostname: u.hostname,
+            port,
+            path: '/',
+            method: 'GET',
+            timeout: timeoutMs,
+            ...(isHttp ? {} : { rejectUnauthorized: true }),
+          },
+          (res) => {
+            res.resume();
+            resolve(true);
+          }
+        );
+        req.on('timeout', () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.on('error', () => resolve(false));
+        req.end();
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  private async isSparingHostReachable(): Promise<boolean> {
+    try {
+      const { BASE } = this.getApiUrls();
+      const base = BASE.startsWith('http://') || BASE.startsWith('https://') ? BASE : `https://${BASE}`;
+      const u = new URL(base);
+      const origin = `${u.protocol}//${u.host}`;
+      return await this.probeHttpOriginReachable(origin, 8000);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reset permanently failed queue rows so they retry after SPARING host is reachable again.
+   * If requeueAllFailed is false, only rows whose error looks like a transient network issue are reset.
+   */
+  private requeueFailedItemsAfterReconnect(requeueAllFailed: boolean): number {
+    const rows = this.db
+      .getDb()
+      .prepare(`SELECT id, error_message FROM sparing_queue WHERE status = 'failed'`)
+      .all() as { id: string; error_message: string | null }[];
+    const stmt = this.db
+      .getDb()
+      .prepare(`UPDATE sparing_queue SET status = 'pending', retry_count = 0, error_message = ? WHERE id = ?`);
+    let n = 0;
+    for (const row of rows) {
+      const ok =
+        requeueAllFailed || this.isLikelyTransientNetworkError(row.error_message || '');
+      if (ok) {
+        stmt.run(null, row.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
   private async addToQueue(sendType: 'hourly' | '2min' | 'testing', hourTimestamp: number, errorMessage: string): Promise<void> {
     try {
       const config = this.getSparingConfig();
@@ -716,6 +821,22 @@ export class SparingService {
   async processQueue(): Promise<void> {
     const config = this.getSparingConfig();
     const maxAttempts = config?.retryMaxAttempts || 5; // Default to 5 if not configured
+
+    try {
+      if (config?.enabled && (await this.isSparingHostReachable())) {
+        const allFailed = Boolean(config.retryAllFailedOnReconnect);
+        const requeued = this.requeueFailedItemsAfterReconnect(allFailed);
+        if (requeued > 0) {
+          getLogger().info(
+            allFailed
+              ? `📶 SPARING host reachable: re-queued ${requeued} failed item(s) (all failures) for retry`
+              : `📶 SPARING host reachable: re-queued ${requeued} failed item(s) that look like network outages for retry`
+          );
+        }
+      }
+    } catch (e: any) {
+      getLogger().warn('SPARING reconnect re-queue check failed:', e?.message);
+    }
 
     const pending = this.db
       .getDb()

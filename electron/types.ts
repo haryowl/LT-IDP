@@ -283,6 +283,8 @@ export interface SparingConfig {
   last2MinSend?: number;
   retryMaxAttempts?: number;
   retryIntervalMinutes?: number;
+  /** When SPARING host is reachable again, re-queue every failed row (not only network-like errors). */
+  retryAllFailedOnReconnect?: boolean;
   createdAt: number;
   updatedAt: number;
 }
