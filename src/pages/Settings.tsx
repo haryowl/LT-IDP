@@ -114,6 +114,10 @@ const Settings: React.FC = () => {
   const [timestampSaving, setTimestampSaving] = useState(false);
   const [timestampMessage, setTimestampMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [sysLoading, setSysLoading] = useState(false);
+  const [sysAutoRefresh, setSysAutoRefresh] = useState(false);
+
   const timezoneOptions = useMemo(() => {
     const tz: string[] = [];
     for (let offset = -12; offset <= 14; offset++) {
