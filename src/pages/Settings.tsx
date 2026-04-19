@@ -54,6 +54,21 @@ interface SystemInfo {
     error?: string;
   };
   collectedAt: number;
+  network?: {
+    summary: {
+      distinctMacCount: number;
+      interfacesWithIpCount: number;
+      ethernetPortNames: string[];
+    };
+    interfaces: Array<{
+      name: string;
+      mac: string | null;
+      portKind: 'ethernet' | 'wireless' | 'loopback' | 'other';
+      ipv4: string[];
+      ipv6: string[];
+      inUse: boolean;
+    }>;
+  };
 }
 
 function formatBytes(b: number): string {
@@ -66,6 +81,19 @@ function formatBytes(b: number): string {
     i++;
   } while (n >= 1024 && i < u.length - 1);
   return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function portKindLabel(k: string): string {
+  switch (k) {
+    case 'ethernet':
+      return 'Ethernet';
+    case 'wireless':
+      return 'Wireless';
+    case 'loopback':
+      return 'Loopback';
+    default:
+      return 'Other';
+  }
 }
 
 function formatDuration(sec: number): string {
@@ -446,6 +474,53 @@ const Settings: React.FC = () => {
                 </Typography>
               )}
             </Grid>
+            {systemInfo.network && (
+              <Grid item xs={12}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Network
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  <strong>{systemInfo.network.summary.distinctMacCount}</strong> distinct MAC address
+                  {systemInfo.network.summary.distinctMacCount === 1 ? '' : 'es'} available (non-loopback)
+                  {' · '}
+                  <strong>{systemInfo.network.summary.interfacesWithIpCount}</strong> interface
+                  {systemInfo.network.summary.interfacesWithIpCount === 1 ? '' : 's'} with assigned IP (in use)
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  Ethernet port{systemInfo.network.summary.ethernetPortNames.length === 1 ? '' : 's'}:{' '}
+                  {systemInfo.network.summary.ethernetPortNames.length > 0
+                    ? systemInfo.network.summary.ethernetPortNames.join(', ')
+                    : 'none detected (names may appear as Other on some systems)'}
+                </Typography>
+                <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+                  {systemInfo.network.interfaces.map((iface) => (
+                    <Box component="li" key={iface.name} sx={{ mb: 1 }}>
+                      <Typography variant="body2">
+                        <strong>{iface.name}</strong> · {portKindLabel(iface.portKind)}
+                        {iface.inUse ? (
+                          <Chip label="In use" size="small" sx={{ ml: 1, height: 20 }} color="success" variant="outlined" />
+                        ) : (
+                          <Chip label="No active IP" size="small" sx={{ ml: 1, height: 20 }} variant="outlined" />
+                        )}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        MAC: {iface.mac ?? '—'}
+                      </Typography>
+                      {iface.ipv4.length > 0 && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          IPv4: {iface.ipv4.join(', ')}
+                        </Typography>
+                      )}
+                      {iface.ipv6.length > 0 && (
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ wordBreak: 'break-all' }}>
+                          IPv6: {iface.ipv6.join(', ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              </Grid>
+            )}
             <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary">
                 Last updated: {new Date(systemInfo.collectedAt).toLocaleString()}
