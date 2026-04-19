@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Autocomplete,
@@ -6,12 +6,16 @@ import {
   Button,
   Chip,
   Divider,
+  FormControlLabel,
   Grid,
+  LinearProgress,
   Paper,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import api from '../api/client';
 import { systemTimestampDefaults } from './ParameterMappings';
 import { useAuthStore } from '../store/authStore';
@@ -27,6 +31,50 @@ interface ParameterMapping {
   inputTimezone?: string;
   outputFormat?: string;
   outputTimezone?: string;
+}
+
+interface SystemInfo {
+  hostname: string;
+  platform: string;
+  osType: string;
+  osRelease: string;
+  arch: string;
+  nodeVersion: string;
+  processUptimeSeconds: number;
+  systemUptimeSeconds: number;
+  loadAverage: [number, number, number] | null;
+  cpuCount: number;
+  memory: { totalBytes: number; freeBytes: number; usedBytes: number; usedPercent: number };
+  disk: {
+    path: string;
+    totalBytes: number | null;
+    freeBytes: number | null;
+    usedBytes: number | null;
+    usedPercent: number | null;
+    error?: string;
+  };
+  collectedAt: number;
+}
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${Math.round(b)} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let n = b;
+  let i = -1;
+  do {
+    n /= 1024;
+    i++;
+  } while (n >= 1024 && i < u.length - 1);
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function formatDuration(sec: number): string {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 const timestampFormatOptions = [
@@ -76,11 +124,31 @@ const Settings: React.FC = () => {
     return tz;
   }, []);
 
+  const loadSystemInfo = useCallback(async () => {
+    try {
+      setSysLoading(true);
+      const info = await api.system?.getSystemInfo?.();
+      setSystemInfo((info as SystemInfo) || null);
+    } catch {
+      setSystemInfo(null);
+    } finally {
+      setSysLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadSettings();
     loadTimestampMapping();
+    loadSystemInfo();
     if (role === 'admin') loadReadOnlyToken();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only
   }, []);
+
+  useEffect(() => {
+    if (!sysAutoRefresh) return;
+    const id = window.setInterval(() => loadSystemInfo(), 30000);
+    return () => window.clearInterval(id);
+  }, [sysAutoRefresh, loadSystemInfo]);
 
   const loadSettings = async () => {
     try {
@@ -269,6 +337,120 @@ const Settings: React.FC = () => {
             Save Settings
           </Button>
         </Box>
+      </Paper>
+
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
+          <Typography variant="h6">System health</Typography>
+          <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+            <FormControlLabel
+              control={<Switch checked={sysAutoRefresh} onChange={(e) => setSysAutoRefresh(e.target.checked)} size="small" />}
+              label="Auto-refresh (30s)"
+            />
+            <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={loadSystemInfo} disabled={sysLoading}>
+              Refresh
+            </Button>
+          </Box>
+        </Box>
+        <Divider sx={{ mb: 2 }} />
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Memory and disk reflect this machine. Disk usage is for the filesystem that contains the application data directory (database and exports).
+        </Typography>
+        {sysLoading && !systemInfo ? (
+          <LinearProgress />
+        ) : systemInfo ? (
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={6}>
+              <Typography variant="subtitle2" color="text.secondary">
+                Host &amp; OS
+              </Typography>
+              <Typography variant="body2">
+                <strong>{systemInfo.hostname}</strong> · {systemInfo.platform} {systemInfo.osRelease} ({systemInfo.arch})
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {systemInfo.osType} · Node {systemInfo.nodeVersion}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="subtitle2" color="text.secondary">
+                Uptime
+              </Typography>
+              <Typography variant="body2">App process: {formatDuration(systemInfo.processUptimeSeconds)}</Typography>
+              <Typography variant="body2">System: {formatDuration(systemInfo.systemUptimeSeconds)}</Typography>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="subtitle2" color="text.secondary">
+                CPU
+              </Typography>
+              <Typography variant="body2">{systemInfo.cpuCount} logical cores</Typography>
+              {systemInfo.loadAverage && (
+                <Typography variant="body2">
+                  Load (1 / 5 / 15 min): {systemInfo.loadAverage.map((n) => n.toFixed(2)).join(' · ')}
+                </Typography>
+              )}
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="subtitle2" color="text.secondary">
+                Memory
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.min(100, systemInfo.memory.usedPercent)}
+                  sx={{ flex: 1, height: 8, borderRadius: 1 }}
+                />
+                <Typography variant="caption" sx={{ minWidth: 42 }}>
+                  {systemInfo.memory.usedPercent.toFixed(0)}%
+                </Typography>
+              </Box>
+              <Typography variant="body2">
+                {formatBytes(systemInfo.memory.usedBytes)} used · {formatBytes(systemInfo.memory.freeBytes)} free ·{' '}
+                {formatBytes(systemInfo.memory.totalBytes)} total
+              </Typography>
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="subtitle2" color="text.secondary">
+                Data volume (filesystem)
+              </Typography>
+              {systemInfo.disk.error ? (
+                <Alert severity="warning" sx={{ mt: 1 }}>
+                  {systemInfo.disk.error}
+                </Alert>
+              ) : systemInfo.disk.totalBytes != null && systemInfo.disk.usedPercent != null ? (
+                <>
+                  <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
+                    {systemInfo.disk.path}
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, mt: 0.5 }}>
+                    <LinearProgress
+                      variant="determinate"
+                      value={Math.min(100, systemInfo.disk.usedPercent)}
+                      sx={{ flex: 1, height: 8, borderRadius: 1 }}
+                    />
+                    <Typography variant="caption" sx={{ minWidth: 42 }}>
+                      {systemInfo.disk.usedPercent.toFixed(0)}%
+                    </Typography>
+                  </Box>
+                  <Typography variant="body2">
+                    {formatBytes(systemInfo.disk.usedBytes!)} used · {formatBytes(systemInfo.disk.freeBytes!)} available ·{' '}
+                    {formatBytes(systemInfo.disk.totalBytes)} total
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Disk stats unavailable
+                </Typography>
+              )}
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                Last updated: {new Date(systemInfo.collectedAt).toLocaleString()}
+              </Typography>
+            </Grid>
+          </Grid>
+        ) : (
+          <Typography color="text.secondary">Could not load system information.</Typography>
+        )}
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }}>

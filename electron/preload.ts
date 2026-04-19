@@ -109,6 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLocalIp: () => ipcRenderer.invoke('system:getLocalIp'),
     getLogDirectory: () => ipcRenderer.invoke('system:getLogDirectory'),
     getCurrentLogFile: () => ipcRenderer.invoke('system:getCurrentLogFile'),
+    getSystemInfo: () => ipcRenderer.invoke('system:getSystemInfo'),
     getReadOnlyToken: () => ipcRenderer.invoke('system:getReadOnlyToken'),
     regenerateReadOnlyToken: () => ipcRenderer.invoke('system:regenerateReadOnlyToken'),
   },

@@ -12,6 +12,7 @@ import { AuthService } from './services/auth';
 import { SparingService } from './services/sparingService';
 import { EmailNotificationService } from './services/emailNotificationService';
 import { ThresholdPublishService } from './services/thresholdPublish';
+import { getSystemInfo } from './services/systemInfo';
 import { setupConsoleLogging, getLogger } from './services/logger';
 import { getStoredSession, setStoredSession, clearStoredSession } from './services/sessionStore';
 
@@ -638,6 +639,11 @@ function setupIpcHandlers() {
 
   ipcMain.handle('system:getCurrentLogFile', async () => {
     return logger.getCurrentLogFile();
+  });
+
+  ipcMain.handle('system:getSystemInfo', async () => {
+    const dataPath = app.getPath('userData');
+    return getSystemInfo(dataPath);
   });
 
   ipcMain.handle('system:getReadOnlyToken', async () => {

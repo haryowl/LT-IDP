@@ -20,6 +20,7 @@ import { SparingService } from '../electron/services/sparingService';
 import { EmailNotificationService } from '../electron/services/emailNotificationService';
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { getLogger } from '../electron/services/logger';
+import { getSystemInfo } from '../electron/services/systemInfo';
 import { SerialPort } from 'serialport';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -388,6 +389,15 @@ app.get('/api/system/local-ip', authMiddleware, (req, res) => {
 });
 app.get('/api/system/log-directory', authMiddleware, (req, res) => res.json(logger.getLogDirectory()));
 app.get('/api/system/current-log-file', authMiddleware, (req, res) => res.json(logger.getCurrentLogFile()));
+app.get('/api/system/info', authMiddleware, async (req, res) => {
+  try {
+    const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    const info = await getSystemInfo(dataDir);
+    res.json(info);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to read system info' });
+  }
+});
 
 app.get('/api/system/read-only-token', authMiddleware, (req, res) => {
   const user = (req as any).user;
