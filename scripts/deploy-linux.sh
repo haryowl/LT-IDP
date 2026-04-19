@@ -19,7 +19,9 @@ echo ""
 # --- 1. Prerequisites ---
 echo "[1/7] Installing prerequisites..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq git build-essential python3 make g++ pkg-config curl
+# python3-setuptools: Python 3.12+ has no distutils; node-gyp needs it for native deps (e.g. lzma-native from electron-builder)
+# liblzma-dev: headers for lzma-native (optional chain under electron-builder)
+sudo apt-get install -y -qq git build-essential python3 python3-setuptools make g++ pkg-config curl liblzma-dev
 
 # Node.js 20 LTS
 if ! command -v node &>/dev/null || [[ $(node -v 2>/dev/null | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then

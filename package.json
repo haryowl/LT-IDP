@@ -1,5 +1,5 @@
 {
-  "name": "iot-scada-client",
+  "name": "lt-idp",
   "version": "1.0.0",
   "description": "A cross-platform desktop application for industrial IoT",
   "main": "dist-electron/main.js",

@@ -33,6 +33,15 @@ For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need
 2. Switch to **Node 20 or 22 LTS** (not 24), e.g. `nvm install 22 && nvm use 22`
 3. Clean and reinstall: `rm -rf node_modules && npm install`
 
+### Linux (Ubuntu 24.04+ / Python 3.12): `ModuleNotFoundError: No module named 'distutils'` (e.g. `lzma-native`)
+
+Python 3.12 removed `distutils`; `node-gyp` (used when building native addons such as `lzma-native` from `electron-builder`) needs a compatibility layer.
+
+1. Install: `sudo apt install -y python3-setuptools liblzma-dev`
+2. Clean and reinstall: `rm -rf node_modules && npm install`
+
+On **ARM64** (e.g. Raspberry Pi), the same packages apply; ensure you use Node 20 or 22 LTS.
+
 `package.json` includes an `engines.node` range; npm may warn if Node is outside that range.
 
 ## Run (development)
