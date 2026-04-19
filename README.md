@@ -139,6 +139,8 @@ Uses Vitest and Testing Library. Tests live under `src/**/*.test.{ts,tsx}`. Main
 | `npm start`      | Run packaged Electron app          |
 | `npm run start:web` | Run web server (after `npm run build:web`) |
 | `npm run preview`| Vite preview (web only)            |
+
+**Production (Linux, PM2):** After `npm run build:web`, from the project root run `pm2 start` (uses `ecosystem.config.js`) or `pm2 start ecosystem.config.cjs`. Set `DATA_DIR` and `PORT` in the env or edit `ecosystem.config.cjs`. Example: `DATA_DIR=$HOME/lt-idp-data pm2 start`.
 | `npm test`       | Run unit tests                     |
 
 ## License

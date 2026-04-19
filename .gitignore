@@ -33,7 +33,3 @@ Thumbs.db
 # Config (if contains sensitive data)
 config/local.json
 
-# Deploy-generated PM2 config (paths are machine-specific)
-ecosystem.config.cjs
-
-
