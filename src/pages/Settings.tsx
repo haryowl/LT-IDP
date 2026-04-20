@@ -50,6 +50,20 @@ interface ParameterMapping {
   outputTimezone?: string;
 }
 
+interface WifiAdapterRow {
+  interfaceName: string;
+  hardwareDescription: string | null;
+  hardwareDetail: string | null;
+  connected: boolean;
+  ssid: string | null;
+  bssid: string | null;
+  signalDbm: number | null;
+  signalPercent: number | null;
+  txRateMbps: number | null;
+  dataSource: 'iw' | 'nmcli' | 'netsh' | 'none';
+  message: string | null;
+}
+
 interface SystemInfo {
   hostname: string;
   platform: string;
@@ -76,6 +90,7 @@ interface SystemInfo {
       distinctMacCount: number;
       interfacesWithIpCount: number;
       ethernetPortNames: string[];
+      wirelessPortNames?: string[];
     };
     interfaces: Array<{
       name: string;
@@ -85,6 +100,7 @@ interface SystemInfo {
       ipv6: string[];
       inUse: boolean;
     }>;
+    wifi?: WifiAdapterRow[];
   };
 }
 
@@ -128,6 +144,13 @@ function usageTone(percent: number): 'success' | 'warning' | 'error' {
   return 'success';
 }
 
+/** Wi‑Fi signal % (higher is better): map to bar color */
+function wifiSignalTone(percent: number): 'success' | 'warning' | 'error' {
+  if (percent < 30) return 'error';
+  if (percent < 55) return 'warning';
+  return 'success';
+}
+
 function ifaceKindIcon(portKind: string) {
   switch (portKind) {
     case 'ethernet':
@@ -168,6 +191,12 @@ function SystemHealthSection({
       return a.name.localeCompare(b.name);
     });
   }, [systemInfo?.network?.interfaces]);
+
+  const wifiByName = useMemo(() => {
+    const m = new Map<string, WifiAdapterRow>();
+    for (const w of systemInfo?.network?.wifi ?? []) m.set(w.interfaceName, w);
+    return m;
+  }, [systemInfo?.network?.wifi]);
 
   const barSx = (tone: 'success' | 'warning' | 'error') => ({
     height: 11,
@@ -455,8 +484,11 @@ function SystemHealthSection({
                   Network interfaces
                 </Typography>
               </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                Wi‑Fi hardware uses udev (Linux) or the adapter description from <code>netsh</code> (Windows). SSID, BSSID, and signal use <code>iw</code>, NetworkManager, or <code>netsh</code> when those tools are available.
+              </Typography>
               <Grid container spacing={1.5} sx={{ mb: 2 }}>
-                <Grid item xs={12} sm={4}>
+                <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
                     <CardContent sx={{ py: 1.75, px: 2 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
@@ -471,7 +503,7 @@ function SystemHealthSection({
                     </CardContent>
                   </Card>
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
                     <CardContent sx={{ py: 1.75, px: 2 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
@@ -486,7 +518,7 @@ function SystemHealthSection({
                     </CardContent>
                   </Card>
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
                     <CardContent sx={{ py: 1.75, px: 2 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
@@ -503,10 +535,29 @@ function SystemHealthSection({
                     </CardContent>
                   </Card>
                 </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
+                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        Wireless (Wi‑Fi)
+                      </Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 600, mt: 0.5, wordBreak: 'break-word' }}>
+                        {(systemInfo.network.summary.wirelessPortNames ?? []).length > 0
+                          ? (systemInfo.network.summary.wirelessPortNames ?? []).join(', ')
+                          : 'None matched by name'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Details below per interface
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
               </Grid>
 
               <Stack spacing={1.25}>
-                {sortedIfaces.map((iface) => (
+                {sortedIfaces.map((iface) => {
+                  const wf = iface.portKind === 'wireless' ? wifiByName.get(iface.name) : undefined;
+                  return (
                   <Card
                     key={iface.name}
                     variant="outlined"
@@ -562,10 +613,100 @@ function SystemHealthSection({
                             {iface.ipv6.join(', ')}
                           </Typography>
                         )}
+                        {wf && (
+                          <>
+                            <Divider sx={{ my: 1.5 }} />
+                            <Typography variant="caption" color="text.secondary" fontWeight={700} letterSpacing={0.4} display="block" sx={{ mb: 1 }}>
+                              Wi‑Fi hardware &amp; association
+                            </Typography>
+                            {wf.hardwareDescription && (
+                              <Typography variant="body2" sx={{ mb: 0.5 }}>
+                                <Box component="span" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  Adapter
+                                </Box>{' '}
+                                {wf.hardwareDescription}
+                              </Typography>
+                            )}
+                            {wf.hardwareDetail && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, fontFamily: 'ui-monospace, monospace' }}>
+                                {wf.hardwareDetail}
+                              </Typography>
+                            )}
+                            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
+                              <Chip
+                                size="small"
+                                label={wf.connected ? 'Associated to AP' : 'Not associated'}
+                                color={wf.connected ? 'success' : 'default'}
+                                variant={wf.connected ? 'filled' : 'outlined'}
+                                sx={{ fontWeight: 600 }}
+                              />
+                              <Chip size="small" label={`Source: ${wf.dataSource}`} variant="outlined" />
+                            </Stack>
+                            {wf.ssid && (
+                              <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', mb: 0.5 }}>
+                                <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
+                                  SSID
+                                </Box>
+                                {wf.ssid}
+                              </Typography>
+                            )}
+                            {wf.bssid && (
+                              <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', mb: 0.5 }}>
+                                <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
+                                  BSSID
+                                </Box>
+                                {wf.bssid}
+                              </Typography>
+                            )}
+                            {(wf.signalDbm != null || wf.signalPercent != null) && (
+                              <Box sx={{ mt: 1 }}>
+                                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                                  <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                                    Signal
+                                  </Typography>
+                                  <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                                    {wf.signalDbm != null && <>{wf.signalDbm} dBm</>}
+                                    {wf.signalDbm != null && wf.signalPercent != null && ' · '}
+                                    {wf.signalPercent != null && <>{wf.signalPercent}% (approx.)</>}
+                                  </Typography>
+                                </Stack>
+                                {wf.signalPercent != null && (
+                                  <LinearProgress
+                                    variant="determinate"
+                                    value={Math.min(100, wf.signalPercent)}
+                                    sx={{
+                                      height: 8,
+                                      borderRadius: 99,
+                                      bgcolor: trackBg,
+                                      '& .MuiLinearProgress-bar': {
+                                        borderRadius: 99,
+                                        bgcolor: theme.palette[wifiSignalTone(wf.signalPercent)].main,
+                                      },
+                                    }}
+                                  />
+                                )}
+                              </Box>
+                            )}
+                            {wf.txRateMbps != null && (
+                              <Typography variant="body2" sx={{ mt: 1, fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem' }}>
+                                <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
+                                  TX rate
+                                </Box>
+                                {wf.txRateMbps} Mbit/s
+                              </Typography>
+                            )}
+                            {wf.message && (
+                              <Alert severity="info" sx={{ mt: 1.5, py: 0.25, borderRadius: 2 }}>
+                                {wf.message}
+                              </Alert>
+                            )}
+                          </>
+                        )}
                       </Stack>
                     </CardContent>
                   </Card>
-                ))}
+                  );
+                })}
               </Stack>
             </Box>
           )}

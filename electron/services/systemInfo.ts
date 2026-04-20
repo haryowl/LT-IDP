@@ -1,6 +1,10 @@
 import os from 'os';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { promises as fs } from 'fs';
+
+const execFileAsync = promisify(execFile);
 
 export interface SystemInfo {
   hostname: string;
@@ -39,9 +43,30 @@ export interface SystemInfo {
       interfacesWithIpCount: number;
       /** Interface names classified as Ethernet (wired) */
       ethernetPortNames: string[];
+      /** Interface names classified as wireless (Wi‑Fi / WLAN) */
+      wirelessPortNames: string[];
     };
     interfaces: NetworkInterfaceInfo[];
+    /** Per wireless interface: hardware + association when detectable */
+    wifi: WifiAdapterInfo[];
   };
+}
+
+export interface WifiAdapterInfo {
+  interfaceName: string;
+  /** Friendly name from OS (udev / netsh Description) */
+  hardwareDescription: string | null;
+  /** Extra id text (e.g. PCI ids) */
+  hardwareDetail: string | null;
+  connected: boolean;
+  ssid: string | null;
+  bssid: string | null;
+  signalDbm: number | null;
+  /** 0–100 heuristic from dBm when known */
+  signalPercent: number | null;
+  txRateMbps: number | null;
+  dataSource: 'iw' | 'nmcli' | 'netsh' | 'none';
+  message: string | null;
 }
 
 export interface NetworkInterfaceInfo {
@@ -75,7 +100,9 @@ function hasUsableAddress(ipv4: string[], ipv6: string[]): boolean {
   return false;
 }
 
-function buildNetworkInfo(): SystemInfo['network'] {
+type NetworkBase = Omit<SystemInfo['network'], 'wifi'>;
+
+function buildNetworkInfo(): NetworkBase {
   const raw = os.networkInterfaces();
   const interfaces: NetworkInterfaceInfo[] = [];
   const macs = new Set<string>();
@@ -101,6 +128,7 @@ function buildNetworkInfo(): SystemInfo['network'] {
   interfaces.sort((a, b) => a.name.localeCompare(b.name));
 
   const ethernetPortNames = interfaces.filter((i) => i.portKind === 'ethernet').map((i) => i.name);
+  const wirelessPortNames = interfaces.filter((i) => i.portKind === 'wireless').map((i) => i.name);
   const interfacesWithIpCount = interfaces.filter((i) => i.portKind !== 'loopback' && i.inUse).length;
 
   return {
@@ -108,9 +136,335 @@ function buildNetworkInfo(): SystemInfo['network'] {
       distinctMacCount: macs.size,
       interfacesWithIpCount,
       ethernetPortNames,
+      wirelessPortNames,
     },
     interfaces,
   };
+}
+
+function safeIfaceName(name: string): boolean {
+  return name.length > 0 && name.length <= 48 && /^[a-zA-Z0-9._@-]+$/.test(name);
+}
+
+function dbmToApproxPercent(dbm: number): number {
+  if (dbm >= -50) return 100;
+  if (dbm <= -92) return 0;
+  return Math.round(((dbm + 92) / 42) * 100);
+}
+
+async function readLinuxPciIds(iface: string): Promise<string | null> {
+  const devPath = `/sys/class/net/${iface}/device`;
+  try {
+    const vendor = (await fs.readFile(path.join(devPath, 'vendor'), 'utf8').catch(() => '')).trim();
+    const device = (await fs.readFile(path.join(devPath, 'device'), 'utf8').catch(() => '')).trim();
+    if (vendor && device) return `PCI ${vendor} ${device}`;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+async function linuxUdevHardware(iface: string): Promise<{ description: string | null; detail: string | null }> {
+  const detail = await readLinuxPciIds(iface);
+  if (!safeIfaceName(iface)) return { description: null, detail };
+  try {
+    const { stdout } = await execFileAsync('udevadm', ['info', '-q', 'property', '-p', `/sys/class/net/${iface}`], {
+      timeout: 4000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    });
+    const vendor = stdout.match(/^ID_VENDOR_FROM_DATABASE=(.+)$/m)?.[1]?.trim();
+    const model = stdout.match(/^ID_MODEL_FROM_DATABASE=(.+)$/m)?.[1]?.trim();
+    const parts = [vendor, model].filter(Boolean);
+    return { description: parts.length ? parts.join(' · ') : null, detail };
+  } catch {
+    return { description: null, detail };
+  }
+}
+
+function parseIwLink(stdout: string): {
+  connected: boolean;
+  ssid: string | null;
+  bssid: string | null;
+  signalDbm: number | null;
+  txRateMbps: number | null;
+} {
+  const t = stdout.trim();
+  if (!t || /^not connected\.?$/im.test(t.split('\n')[0]?.trim() ?? '')) {
+    return { connected: false, ssid: null, bssid: null, signalDbm: null, txRateMbps: null };
+  }
+  const ssid = stdout.match(/^\s*SSID:\s*(.+)$/m)?.[1]?.trim() ?? null;
+  const bssid = stdout.match(/Connected to\s+([0-9a-f:]+)/i)?.[1]?.toLowerCase() ?? null;
+  const sig = stdout.match(/signal:\s*(-?\d+)\s*dBm/i);
+  const signalDbm = sig ? Number(sig[1]) : null;
+  const txm = stdout.match(/tx bitrate:\s*([\d.]+)\s*MBit\/s/i);
+  const txRateMbps = txm ? Number(txm[1]) : null;
+  return {
+    connected: !!(ssid || bssid),
+    ssid,
+    bssid,
+    signalDbm: Number.isFinite(signalDbm) ? signalDbm : null,
+    txRateMbps: Number.isFinite(txRateMbps) ? txRateMbps : null,
+  };
+}
+
+async function linuxIwLink(iface: string): Promise<{ stdout: string } | null> {
+  if (!safeIfaceName(iface)) return null;
+  try {
+    const r = await execFileAsync('iw', ['dev', iface, 'link'], {
+      timeout: 4000,
+      maxBuffer: 128 * 1024,
+      windowsHide: true,
+    });
+    return { stdout: String(r.stdout || '') };
+  } catch {
+    return null;
+  }
+}
+
+/** nmcli device show (NetworkManager) — fills SSID/state when iw is missing */
+async function linuxNmcliWifi(iface: string): Promise<{
+  connected: boolean;
+  ssid: string | null;
+  state: string | null;
+}> {
+  if (!safeIfaceName(iface)) return { connected: false, ssid: null, state: null };
+  try {
+    const { stdout } = await execFileAsync('nmcli', ['-t', 'device', 'show', iface], {
+      timeout: 4000,
+      maxBuffer: 128 * 1024,
+      windowsHide: true,
+    });
+    const state = stdout.match(/GENERAL\.STATE:\s*(.+)/)?.[1]?.trim() ?? null;
+    const conn = stdout.match(/GENERAL\.CONNECTION:\s*(.+)/)?.[1]?.trim() ?? null;
+    const connected = !!(state && /connected|activated/i.test(state) && conn && conn !== '--');
+    const ssid = connected && conn ? conn : null;
+    return { connected, ssid, state };
+  } catch {
+    return { connected: false, ssid: null, state: null };
+  }
+}
+
+async function wifiLinux(iface: string): Promise<WifiAdapterInfo> {
+  const { description: hwDesc, detail: hwDetail } = await linuxUdevHardware(iface);
+  const iwOut = await linuxIwLink(iface);
+  let dataSource: WifiAdapterInfo['dataSource'] = 'none';
+  let connected = false;
+  let ssid: string | null = null;
+  let bssid: string | null = null;
+  let signalDbm: number | null = null;
+  let txRateMbps: number | null = null;
+  let message: string | null = null;
+
+  if (iwOut) {
+    const p = parseIwLink(iwOut.stdout);
+    connected = p.connected;
+    ssid = p.ssid;
+    bssid = p.bssid;
+    signalDbm = p.signalDbm;
+    txRateMbps = p.txRateMbps;
+    dataSource = 'iw';
+    if (!connected && iwOut.stdout.trim()) {
+      const nm = await linuxNmcliWifi(iface);
+      if (nm.connected && nm.ssid) {
+        connected = true;
+        ssid = nm.ssid;
+        dataSource = 'nmcli';
+      }
+    }
+  } else {
+    const nm = await linuxNmcliWifi(iface);
+    if (nm.state || nm.ssid) {
+      dataSource = 'nmcli';
+      connected = nm.connected;
+      ssid = nm.ssid;
+    } else {
+      message = 'Install `iw` or use NetworkManager (`nmcli`) for Wi‑Fi status';
+    }
+  }
+
+  const signalPercent = signalDbm != null && Number.isFinite(signalDbm) ? dbmToApproxPercent(signalDbm) : null;
+
+  return {
+    interfaceName: iface,
+    hardwareDescription: hwDesc,
+    hardwareDetail: hwDetail,
+    connected,
+    ssid,
+    bssid,
+    signalDbm,
+    signalPercent,
+    txRateMbps,
+    dataSource,
+    message,
+  };
+}
+
+function normIfaceKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\u2011/g, '-')
+    .replace(/\u2010/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+type WinWifiBlock = {
+  name: string | null;
+  description: string | null;
+  state: string | null;
+  ssid: string | null;
+  signalPercent: number | null;
+};
+
+function parseNetshWlanInterfaces(stdout: string): WinWifiBlock[] {
+  const lines = stdout.replace(/\r\n/g, '\n').split('\n');
+  const blocks: WinWifiBlock[] = [];
+  let cur: Partial<WinWifiBlock> | null = null;
+  const flush = () => {
+    if (cur?.name) {
+      blocks.push({
+        name: cur.name,
+        description: cur.description ?? null,
+        state: cur.state ?? null,
+        ssid: cur.ssid && String(cur.ssid).trim() ? cur.ssid : null,
+        signalPercent: Number.isFinite(cur.signalPercent as number) ? (cur.signalPercent as number) : null,
+      });
+    }
+    cur = null;
+  };
+  for (const line of lines) {
+    const nm = line.match(/^\s*Name\s*:\s*(.+)$/i);
+    if (nm) {
+      flush();
+      cur = { name: nm[1].trim() };
+      continue;
+    }
+    if (!cur) continue;
+    const d = line.match(/^\s*Description\s*:\s*(.+)$/i);
+    if (d) cur.description = d[1].trim();
+    const st = line.match(/^\s*State\s*:\s*(.+)$/i);
+    if (st) cur.state = st[1].trim();
+    const ss = line.match(/^\s*SSID\s*:\s*(.+)$/i);
+    if (ss) cur.ssid = ss[1].trim();
+    const sg = line.match(/^\s*Signal\s*:\s*(\d+)\s*%/i);
+    if (sg) cur.signalPercent = Number(sg[1]);
+  }
+  flush();
+  return blocks;
+}
+
+async function wifiWindows(iface: string): Promise<WifiAdapterInfo> {
+  let hardwareDescription: string | null = null;
+  let hardwareDetail: string | null = null;
+  let connected = false;
+  let ssid: string | null = null;
+  let bssid: string | null = null;
+  let signalDbm: number | null = null;
+  let signalPercent: number | null = null;
+  let txRateMbps: number | null = null;
+  let dataSource: WifiAdapterInfo['dataSource'] = 'none';
+  let message: string | null = null;
+
+  try {
+    const { stdout } = await execFileAsync(
+      'netsh',
+      ['wlan', 'show', 'interfaces'],
+      { timeout: 6000, maxBuffer: 512 * 1024, windowsHide: true, encoding: 'utf8' }
+    );
+    const blocks = parseNetshWlanInterfaces(String(stdout));
+    const want = normIfaceKey(iface);
+    let b =
+      blocks.find((x) => x.name && normIfaceKey(x.name) === want) ||
+      (blocks.length === 1 ? blocks[0] : blocks.find((x) => /wi-?fi|wireless/i.test(x.name || '')));
+
+    if (b) {
+      dataSource = 'netsh';
+      hardwareDescription = b.description;
+      connected = !!(b.state && /connected/i.test(b.state));
+      ssid = b.ssid;
+      signalPercent = b.signalPercent;
+    } else {
+      message = 'No matching Wi‑Fi adapter block from netsh';
+    }
+  } catch (e: any) {
+    message = e?.message || String(e);
+  }
+
+  return {
+    interfaceName: iface,
+    hardwareDescription,
+    hardwareDetail,
+    connected,
+    ssid,
+    bssid,
+    signalDbm,
+    signalPercent,
+    txRateMbps,
+    dataSource,
+    message,
+  };
+}
+
+async function wifiDarwin(iface: string): Promise<WifiAdapterInfo> {
+  return {
+    interfaceName: iface,
+    hardwareDescription: null,
+    hardwareDetail: null,
+    connected: false,
+    ssid: null,
+    bssid: null,
+    signalDbm: null,
+    signalPercent: null,
+    txRateMbps: null,
+    dataSource: 'none',
+    message: 'Wi‑Fi link details are not collected on macOS in this build',
+  };
+}
+
+async function collectWifiAdapters(interfaces: NetworkInterfaceInfo[]): Promise<WifiAdapterInfo[]> {
+  const wireless = interfaces.filter((i) => i.portKind === 'wireless');
+  const out: WifiAdapterInfo[] = [];
+  for (const i of wireless) {
+    try {
+      if (process.platform === 'linux') {
+        out.push(await wifiLinux(i.name));
+      } else if (process.platform === 'win32') {
+        out.push(await wifiWindows(i.name));
+      } else if (process.platform === 'darwin') {
+        out.push(await wifiDarwin(i.name));
+      } else {
+        out.push({
+          interfaceName: i.name,
+          hardwareDescription: null,
+          hardwareDetail: null,
+          connected: false,
+          ssid: null,
+          bssid: null,
+          signalDbm: null,
+          signalPercent: null,
+          txRateMbps: null,
+          dataSource: 'none',
+          message: 'Wi‑Fi probe not implemented for this platform',
+        });
+      }
+    } catch (e: any) {
+      out.push({
+        interfaceName: i.name,
+        hardwareDescription: null,
+        hardwareDetail: null,
+        connected: false,
+        ssid: null,
+        bssid: null,
+        signalDbm: null,
+        signalPercent: null,
+        txRateMbps: null,
+        dataSource: 'none',
+        message: e?.message || String(e),
+      });
+    }
+  }
+  return out;
 }
 
 function num(v: bigint | number): number {
@@ -165,6 +519,10 @@ export async function getSystemInfo(dataPath: string): Promise<SystemInfo> {
   const loadAverage: [number, number, number] | null =
     process.platform === 'win32' ? null : [la[0] ?? 0, la[1] ?? 0, la[2] ?? 0];
 
+  const baseNet = buildNetworkInfo();
+  const wifi = await collectWifiAdapters(baseNet.interfaces);
+  const network: SystemInfo['network'] = { ...baseNet, wifi };
+
   return {
     hostname: os.hostname(),
     platform: os.platform(),
@@ -184,6 +542,6 @@ export async function getSystemInfo(dataPath: string): Promise<SystemInfo> {
     },
     disk,
     collectedAt: Date.now(),
-    network: buildNetworkInfo(),
+    network,
   };
 }
