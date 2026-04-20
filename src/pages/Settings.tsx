@@ -2,20 +2,37 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Autocomplete,
+  Avatar,
   Box,
   Button,
+  Card,
+  CardContent,
   Chip,
   Divider,
   FormControlLabel,
   Grid,
   LinearProgress,
   Paper,
+  Stack,
   Switch,
   TextField,
   Typography,
 } from '@mui/material';
+import { alpha, useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined';
+import AccessTimeOutlinedIcon from '@mui/icons-material/AccessTimeOutlined';
+import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
+import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
+import SpeedOutlinedIcon from '@mui/icons-material/SpeedOutlined';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LanOutlinedIcon from '@mui/icons-material/LanOutlined';
+import WifiOutlinedIcon from '@mui/icons-material/WifiOutlined';
+import LoopOutlinedIcon from '@mui/icons-material/LoopOutlined';
+import SettingsEthernetOutlinedIcon from '@mui/icons-material/SettingsEthernetOutlined';
+import DeviceHubOutlinedIcon from '@mui/icons-material/DeviceHubOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import api from '../api/client';
 import { systemTimestampDefaults } from './ParameterMappings';
 import { useAuthStore } from '../store/authStore';
@@ -103,6 +120,467 @@ function formatDuration(sec: number): string {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function usageTone(percent: number): 'success' | 'warning' | 'error' {
+  if (percent >= 90) return 'error';
+  if (percent >= 75) return 'warning';
+  return 'success';
+}
+
+function ifaceKindIcon(portKind: string) {
+  switch (portKind) {
+    case 'ethernet':
+      return <SettingsEthernetOutlinedIcon fontSize="small" />;
+    case 'wireless':
+      return <WifiOutlinedIcon fontSize="small" />;
+    case 'loopback':
+      return <LoopOutlinedIcon fontSize="small" />;
+    default:
+      return <DeviceHubOutlinedIcon fontSize="small" />;
+  }
+}
+
+type SystemHealthSectionProps = {
+  systemInfo: SystemInfo | null;
+  sysLoading: boolean;
+  loadSystemInfo: () => void;
+  sysAutoRefresh: boolean;
+  setSysAutoRefresh: (v: boolean) => void;
+};
+
+function SystemHealthSection({
+  systemInfo,
+  sysLoading,
+  loadSystemInfo,
+  sysAutoRefresh,
+  setSysAutoRefresh,
+}: SystemHealthSectionProps) {
+  const theme = useTheme();
+  const trackBg = alpha(theme.palette.text.primary, 0.09);
+
+  const sortedIfaces = useMemo(() => {
+    if (!systemInfo?.network?.interfaces) return [];
+    return [...systemInfo.network.interfaces].sort((a, b) => {
+      if (a.portKind === 'loopback' && b.portKind !== 'loopback') return 1;
+      if (b.portKind === 'loopback' && a.portKind !== 'loopback') return -1;
+      if (a.inUse !== b.inUse) return a.inUse ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [systemInfo?.network?.interfaces]);
+
+  const barSx = (tone: 'success' | 'warning' | 'error') => ({
+    height: 11,
+    borderRadius: 99,
+    bgcolor: trackBg,
+    '& .MuiLinearProgress-bar': {
+      borderRadius: 99,
+      bgcolor: theme.palette[tone].main,
+    },
+  });
+
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        p: { xs: 2, sm: 3 },
+        mb: 3,
+        borderRadius: 2,
+        border: '1px solid',
+        borderColor: alpha(theme.palette.divider, 0.14),
+        background: `linear-gradient(160deg, ${alpha(theme.palette.primary.main, 0.06)} 0%, ${alpha(theme.palette.background.paper, 1)} 42%, ${alpha(theme.palette.secondary?.main ?? theme.palette.primary.main, 0.04)} 100%)`,
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      {sysLoading && systemInfo && (
+        <LinearProgress
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 3,
+            borderRadius: 0,
+            opacity: 0.85,
+          }}
+        />
+      )}
+
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Avatar
+            sx={{
+              width: 44,
+              height: 44,
+              bgcolor: alpha(theme.palette.primary.main, 0.14),
+              color: 'primary.main',
+            }}
+          >
+            <SpeedOutlinedIcon />
+          </Avatar>
+          <Box>
+            <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+              System health
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Live view of this host
+            </Typography>
+          </Box>
+        </Stack>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent={{ xs: 'flex-start', sm: 'flex-end' }}>
+          <FormControlLabel
+            control={<Switch checked={sysAutoRefresh} onChange={(e) => setSysAutoRefresh(e.target.checked)} size="small" />}
+            label={<Typography variant="body2">Auto-refresh · 30s</Typography>}
+            sx={{ mr: 0 }}
+          />
+          <Button variant="contained" size="small" startIcon={<RefreshIcon />} onClick={loadSystemInfo} disabled={sysLoading} disableElevation>
+            Refresh
+          </Button>
+        </Stack>
+      </Stack>
+
+      <Alert severity="info" icon={<InfoOutlinedIcon />} sx={{ mb: 2.5, py: 0.5, borderRadius: 2, bgcolor: alpha(theme.palette.info.main, 0.06), border: '1px solid', borderColor: alpha(theme.palette.info.main, 0.12) }}>
+        <Typography variant="body2">
+          Memory and CPU reflect this machine. <strong>Data volume</strong> shows the filesystem that holds your app data (database and exports).
+        </Typography>
+      </Alert>
+
+      {sysLoading && !systemInfo ? (
+        <Box sx={{ py: 4 }}>
+          <LinearProgress sx={{ borderRadius: 2, height: 8 }} />
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>
+            Loading system metrics…
+          </Typography>
+        </Box>
+      ) : systemInfo ? (
+        <Stack spacing={2.5}>
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={6}>
+              <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
+                <CardContent sx={{ p: 2.5 }}>
+                  <Stack direction="row" spacing={2} alignItems="flex-start">
+                    <Avatar sx={{ bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', width: 48, height: 48 }}>
+                      <ComputerOutlinedIcon />
+                    </Avatar>
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.5 }}>
+                        Host &amp; OS
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, wordBreak: 'break-word', mt: 0.25 }}>
+                        {systemInfo.hostname}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        {systemInfo.platform} {systemInfo.osRelease} · {systemInfo.arch}
+                      </Typography>
+                      <Chip size="small" label={systemInfo.osType} sx={{ mt: 1.5, fontWeight: 500 }} variant="outlined" />
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                        Node {systemInfo.nodeVersion}
+                      </Typography>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
+                <CardContent sx={{ p: 2.5 }}>
+                  <Stack direction="row" spacing={2} alignItems="flex-start">
+                    <Avatar sx={{ bgcolor: alpha(theme.palette.secondary.main, 0.15), color: 'secondary.main', width: 48, height: 48 }}>
+                      <AccessTimeOutlinedIcon />
+                    </Avatar>
+                    <Box sx={{ flex: 1 }}>
+                      <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.5 }}>
+                        Uptime
+                      </Typography>
+                      <Grid container spacing={2} sx={{ mt: 0.5 }}>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            App process
+                          </Typography>
+                          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                            {formatDuration(systemInfo.processUptimeSeconds)}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            System
+                          </Typography>
+                          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                            {formatDuration(systemInfo.systemUptimeSeconds)}
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                      <Divider sx={{ my: 2 }} />
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <Avatar sx={{ width: 36, height: 36, bgcolor: alpha(theme.palette.warning.main, 0.12), color: 'warning.dark' }}>
+                          <SpeedOutlinedIcon fontSize="small" />
+                        </Avatar>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            CPU
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {systemInfo.cpuCount} logical cores
+                          </Typography>
+                          {systemInfo.loadAverage ? (
+                            <Stack direction="row" spacing={0.75} flexWrap="wrap" sx={{ mt: 0.75 }}>
+                              {(['1m', '5m', '15m'] as const).map((label, i) => (
+                                <Chip
+                                  key={label}
+                                  size="small"
+                                  label={`${label}: ${systemInfo.loadAverage![i].toFixed(2)}`}
+                                  variant="filled"
+                                  sx={{ bgcolor: alpha(theme.palette.text.primary, 0.06), fontWeight: 500 }}
+                                />
+                              ))}
+                            </Stack>
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              Load average not available on this platform
+                            </Typography>
+                          )}
+                        </Box>
+                      </Stack>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
+                <CardContent sx={{ p: 2.5 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1.5 }}>
+                    <Stack direction="row" spacing={1.5} alignItems="center">
+                      <Avatar sx={{ bgcolor: alpha(theme.palette.info.main, 0.14), color: 'info.dark', width: 44, height: 44 }}>
+                        <MemoryOutlinedIcon />
+                      </Avatar>
+                      <Box>
+                        <Typography variant="overline" color="text.secondary">
+                          Memory
+                        </Typography>
+                        <Typography
+                          variant="h4"
+                          sx={{
+                            fontWeight: 700,
+                            lineHeight: 1.1,
+                            color: theme.palette[usageTone(systemInfo.memory.usedPercent)].main,
+                          }}
+                        >
+                          {systemInfo.memory.usedPercent.toFixed(0)}%
+                          <Typography component="span" variant="body2" color="text.secondary" sx={{ fontWeight: 400, ml: 0.5 }}>
+                            used
+                          </Typography>
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    <Chip label={usageTone(systemInfo.memory.usedPercent) === 'success' ? 'Healthy' : usageTone(systemInfo.memory.usedPercent) === 'warning' ? 'Elevated' : 'High'} color={usageTone(systemInfo.memory.usedPercent)} size="small" sx={{ fontWeight: 600 }} />
+                  </Stack>
+                  <LinearProgress variant="determinate" value={Math.min(100, systemInfo.memory.usedPercent)} sx={barSx(usageTone(systemInfo.memory.usedPercent))} />
+                  <Stack direction="row" spacing={2} flexWrap="wrap" sx={{ mt: 1.5 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      <strong>{formatBytes(systemInfo.memory.usedBytes)}</strong> used
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      <strong>{formatBytes(systemInfo.memory.freeBytes)}</strong> free
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      <strong>{formatBytes(systemInfo.memory.totalBytes)}</strong> total
+                    </Typography>
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
+                <CardContent sx={{ p: 2.5 }}>
+                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
+                    <Avatar sx={{ bgcolor: alpha(theme.palette.success.main, 0.14), color: 'success.dark', width: 44, height: 44 }}>
+                      <StorageOutlinedIcon />
+                    </Avatar>
+                    <Box>
+                      <Typography variant="overline" color="text.secondary">
+                        Data volume
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        Application data disk
+                      </Typography>
+                    </Box>
+                  </Stack>
+                  {systemInfo.disk.error ? (
+                    <Alert severity="warning" sx={{ borderRadius: 2 }}>
+                      {systemInfo.disk.error}
+                    </Alert>
+                  ) : systemInfo.disk.totalBytes != null && systemInfo.disk.usedPercent != null ? (
+                    <>
+                      <Typography variant="caption" component="div" color="text.secondary" sx={{ wordBreak: 'break-all', mb: 1.5, fontFamily: 'ui-monospace, monospace' }}>
+                        {systemInfo.disk.path}
+                      </Typography>
+                      <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 0.75 }}>
+                        <Typography variant="h4" sx={{ fontWeight: 700, color: theme.palette[usageTone(systemInfo.disk.usedPercent)].main }}>
+                          {systemInfo.disk.usedPercent.toFixed(0)}%
+                        </Typography>
+                        <Chip label={usageTone(systemInfo.disk.usedPercent) === 'success' ? 'Plenty of space' : usageTone(systemInfo.disk.usedPercent) === 'warning' ? 'Worth watching' : 'Low space'} color={usageTone(systemInfo.disk.usedPercent)} size="small" sx={{ fontWeight: 600 }} />
+                      </Stack>
+                      <LinearProgress variant="determinate" value={Math.min(100, systemInfo.disk.usedPercent)} sx={barSx(usageTone(systemInfo.disk.usedPercent))} />
+                      <Stack direction="row" spacing={2} flexWrap="wrap" sx={{ mt: 1.5 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          <strong>{formatBytes(systemInfo.disk.usedBytes!)}</strong> used
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          <strong>{formatBytes(systemInfo.disk.freeBytes!)}</strong> free
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          <strong>{formatBytes(systemInfo.disk.totalBytes)}</strong> total
+                        </Typography>
+                      </Stack>
+                    </>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Disk stats unavailable on this Node build.
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          {systemInfo.network && (
+            <Box>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+                <HubOutlinedIcon color="action" />
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                  Network interfaces
+                </Typography>
+              </Stack>
+              <Grid container spacing={1.5} sx={{ mb: 2 }}>
+                <Grid item xs={12} sm={4}>
+                  <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
+                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        MAC addresses
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.25 }}>
+                        {systemInfo.network.summary.distinctMacCount}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        distinct (non-loopback)
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
+                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        Interfaces in use
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.25 }}>
+                        {systemInfo.network.summary.interfacesWithIpCount}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        have a routable / LAN address
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
+                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                        Ethernet (wired)
+                      </Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 600, mt: 0.5, wordBreak: 'break-word' }}>
+                        {systemInfo.network.summary.ethernetPortNames.length > 0
+                          ? systemInfo.network.summary.ethernetPortNames.join(', ')
+                          : 'None matched by name'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Heuristic from OS labels
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+
+              <Stack spacing={1.25}>
+                {sortedIfaces.map((iface) => (
+                  <Card
+                    key={iface.name}
+                    variant="outlined"
+                    sx={{
+                      borderRadius: 2,
+                      borderColor: iface.inUse ? alpha(theme.palette.success.main, 0.35) : alpha(theme.palette.divider, 0.12),
+                      bgcolor: iface.inUse ? alpha(theme.palette.success.main, 0.03) : alpha(theme.palette.action.hover, 0.04),
+                    }}
+                  >
+                    <CardContent sx={{ py: 2, px: 2.25, '&:last-child': { pb: 2 } }}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                          <Avatar sx={{ width: 40, height: 40, bgcolor: alpha(theme.palette.text.primary, 0.07) }}>{ifaceKindIcon(iface.portKind)}</Avatar>
+                          <Box>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                              {iface.name}
+                            </Typography>
+                            <Stack direction="row" spacing={0.75} flexWrap="wrap" alignItems="center">
+                              <Chip size="small" label={portKindLabel(iface.portKind)} variant="outlined" />
+                              {iface.portKind === 'ethernet' && <LanOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />}
+                              {iface.portKind === 'wireless' && <WifiOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />}
+                            </Stack>
+                          </Box>
+                        </Stack>
+                        <Chip
+                          label={iface.inUse ? 'In use' : 'No active IP'}
+                          color={iface.inUse ? 'success' : 'default'}
+                          size="small"
+                          sx={{ fontWeight: 600 }}
+                          variant={iface.inUse ? 'filled' : 'outlined'}
+                        />
+                      </Stack>
+                      <Stack spacing={0.75} sx={{ mt: 2, pl: { sm: 6.5 } }}>
+                        <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem' }}>
+                          <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
+                            MAC
+                          </Box>
+                          {iface.mac ?? '—'}
+                        </Typography>
+                        {iface.ipv4.length > 0 && (
+                          <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem' }}>
+                            <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
+                              IPv4
+                            </Box>
+                            {iface.ipv4.join(', ')}
+                          </Typography>
+                        )}
+                        {iface.ipv6.length > 0 && (
+                          <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', wordBreak: 'break-all' }}>
+                            <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52, verticalAlign: 'top' }}>
+                              IPv6
+                            </Box>
+                            {iface.ipv6.join(', ')}
+                          </Typography>
+                        )}
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                ))}
+              </Stack>
+            </Box>
+          )}
+
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right' }}>
+            Last updated · {new Date(systemInfo.collectedAt).toLocaleString()}
+          </Typography>
+        </Stack>
+      ) : (
+        <Alert severity="error" sx={{ borderRadius: 2 }}>
+          Could not load system information. Check your connection and try Refresh.
+        </Alert>
+      )}
+    </Paper>
+  );
 }
 
 const timestampFormatOptions = [
@@ -371,166 +849,13 @@ const Settings: React.FC = () => {
         </Box>
       </Paper>
 
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
-          <Typography variant="h6">System health</Typography>
-          <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
-            <FormControlLabel
-              control={<Switch checked={sysAutoRefresh} onChange={(e) => setSysAutoRefresh(e.target.checked)} size="small" />}
-              label="Auto-refresh (30s)"
-            />
-            <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={loadSystemInfo} disabled={sysLoading}>
-              Refresh
-            </Button>
-          </Box>
-        </Box>
-        <Divider sx={{ mb: 2 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Memory and disk reflect this machine. Disk usage is for the filesystem that contains the application data directory (database and exports).
-        </Typography>
-        {sysLoading && !systemInfo ? (
-          <LinearProgress />
-        ) : systemInfo ? (
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                Host &amp; OS
-              </Typography>
-              <Typography variant="body2">
-                <strong>{systemInfo.hostname}</strong> · {systemInfo.platform} {systemInfo.osRelease} ({systemInfo.arch})
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {systemInfo.osType} · Node {systemInfo.nodeVersion}
-              </Typography>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                Uptime
-              </Typography>
-              <Typography variant="body2">App process: {formatDuration(systemInfo.processUptimeSeconds)}</Typography>
-              <Typography variant="body2">System: {formatDuration(systemInfo.systemUptimeSeconds)}</Typography>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                CPU
-              </Typography>
-              <Typography variant="body2">{systemInfo.cpuCount} logical cores</Typography>
-              {systemInfo.loadAverage && (
-                <Typography variant="body2">
-                  Load (1 / 5 / 15 min): {systemInfo.loadAverage.map((n) => n.toFixed(2)).join(' · ')}
-                </Typography>
-              )}
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                Memory
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <LinearProgress
-                  variant="determinate"
-                  value={Math.min(100, systemInfo.memory.usedPercent)}
-                  sx={{ flex: 1, height: 8, borderRadius: 1 }}
-                />
-                <Typography variant="caption" sx={{ minWidth: 42 }}>
-                  {systemInfo.memory.usedPercent.toFixed(0)}%
-                </Typography>
-              </Box>
-              <Typography variant="body2">
-                {formatBytes(systemInfo.memory.usedBytes)} used · {formatBytes(systemInfo.memory.freeBytes)} free ·{' '}
-                {formatBytes(systemInfo.memory.totalBytes)} total
-              </Typography>
-            </Grid>
-            <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                Data volume (filesystem)
-              </Typography>
-              {systemInfo.disk.error ? (
-                <Alert severity="warning" sx={{ mt: 1 }}>
-                  {systemInfo.disk.error}
-                </Alert>
-              ) : systemInfo.disk.totalBytes != null && systemInfo.disk.usedPercent != null ? (
-                <>
-                  <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
-                    {systemInfo.disk.path}
-                  </Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, mt: 0.5 }}>
-                    <LinearProgress
-                      variant="determinate"
-                      value={Math.min(100, systemInfo.disk.usedPercent)}
-                      sx={{ flex: 1, height: 8, borderRadius: 1 }}
-                    />
-                    <Typography variant="caption" sx={{ minWidth: 42 }}>
-                      {systemInfo.disk.usedPercent.toFixed(0)}%
-                    </Typography>
-                  </Box>
-                  <Typography variant="body2">
-                    {formatBytes(systemInfo.disk.usedBytes!)} used · {formatBytes(systemInfo.disk.freeBytes!)} available ·{' '}
-                    {formatBytes(systemInfo.disk.totalBytes)} total
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  Disk stats unavailable
-                </Typography>
-              )}
-            </Grid>
-            {systemInfo.network && (
-              <Grid item xs={12}>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Network
-                </Typography>
-                <Typography variant="body2" sx={{ mb: 1 }}>
-                  <strong>{systemInfo.network.summary.distinctMacCount}</strong> distinct MAC address
-                  {systemInfo.network.summary.distinctMacCount === 1 ? '' : 'es'} available (non-loopback)
-                  {' · '}
-                  <strong>{systemInfo.network.summary.interfacesWithIpCount}</strong> interface
-                  {systemInfo.network.summary.interfacesWithIpCount === 1 ? '' : 's'} with assigned IP (in use)
-                </Typography>
-                <Typography variant="body2" sx={{ mb: 1 }}>
-                  Ethernet port{systemInfo.network.summary.ethernetPortNames.length === 1 ? '' : 's'}:{' '}
-                  {systemInfo.network.summary.ethernetPortNames.length > 0
-                    ? systemInfo.network.summary.ethernetPortNames.join(', ')
-                    : 'none detected (names may appear as Other on some systems)'}
-                </Typography>
-                <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-                  {systemInfo.network.interfaces.map((iface) => (
-                    <Box component="li" key={iface.name} sx={{ mb: 1 }}>
-                      <Typography variant="body2">
-                        <strong>{iface.name}</strong> · {portKindLabel(iface.portKind)}
-                        {iface.inUse ? (
-                          <Chip label="In use" size="small" sx={{ ml: 1, height: 20 }} color="success" variant="outlined" />
-                        ) : (
-                          <Chip label="No active IP" size="small" sx={{ ml: 1, height: 20 }} variant="outlined" />
-                        )}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" display="block">
-                        MAC: {iface.mac ?? '—'}
-                      </Typography>
-                      {iface.ipv4.length > 0 && (
-                        <Typography variant="caption" color="text.secondary" display="block">
-                          IPv4: {iface.ipv4.join(', ')}
-                        </Typography>
-                      )}
-                      {iface.ipv6.length > 0 && (
-                        <Typography variant="caption" color="text.secondary" display="block" sx={{ wordBreak: 'break-all' }}>
-                          IPv6: {iface.ipv6.join(', ')}
-                        </Typography>
-                      )}
-                    </Box>
-                  ))}
-                </Box>
-              </Grid>
-            )}
-            <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary">
-                Last updated: {new Date(systemInfo.collectedAt).toLocaleString()}
-              </Typography>
-            </Grid>
-          </Grid>
-        ) : (
-          <Typography color="text.secondary">Could not load system information.</Typography>
-        )}
-      </Paper>
+      <SystemHealthSection
+        systemInfo={systemInfo}
+        sysLoading={sysLoading}
+        loadSystemInfo={loadSystemInfo}
+        sysAutoRefresh={sysAutoRefresh}
+        setSysAutoRefresh={setSysAutoRefresh}
+      />
 
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
