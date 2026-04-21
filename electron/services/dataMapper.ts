@@ -3,6 +3,7 @@ import type { DatabaseService } from './database';
 import type { ParameterMapping, RealtimeData } from '../types';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry, SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
+import type { GnssService } from './gnssService';
 
 export class DataMapperService extends EventEmitter {
   private mappings: Map<string, ParameterMapping> = new Map();
@@ -10,7 +11,7 @@ export class DataMapperService extends EventEmitter {
   private systemTimestampIntervalMs: number;
   private lastStoredTimestamps: Map<string, number> = new Map();
 
-  constructor(private db: DatabaseService) {
+  constructor(private db: DatabaseService, private gnss?: GnssService) {
     super();
     this.loadMappings();
     this.systemTimestampIntervalMs = Math.max(1, this.db.getSystemTimestampInterval()) * 1000;
@@ -414,7 +415,7 @@ export class DataMapperService extends EventEmitter {
       const now = Date.now();
       const sourceId = mapping.sourceDeviceId || 'system-timestamp';
 
-      let value: string | number;
+      let value: any;
       if (sourceId === 'system-timestamp') {
         value = now;
       } else if (sourceId === 'system-clientId') {
@@ -433,6 +434,34 @@ export class DataMapperService extends EventEmitter {
         value = tel.getHttpSuccess();
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.HTTP_FAIL) {
         value = tel.getHttpFail();
+      } else if (sourceId.startsWith('system-gnss-')) {
+        const fix = this.gnss?.getLatestFix?.();
+        if (!fix) {
+          continue;
+        }
+        if (sourceId === 'system-gnss-latitude') {
+          value = fix.latitude;
+        } else if (sourceId === 'system-gnss-longitude') {
+          value = fix.longitude;
+        } else if (sourceId === 'system-gnss-altitude-m') {
+          value = fix.altitudeM;
+        } else if (sourceId === 'system-gnss-speed-kmh') {
+          value = fix.speedKmh;
+        } else if (sourceId === 'system-gnss-satellites') {
+          value = fix.satellites;
+        } else if (sourceId === 'system-gnss-fix-quality') {
+          value = fix.fixQuality;
+        } else if (sourceId === 'system-gnss-fix-valid') {
+          value = fix.valid ? 1 : 0;
+        } else if (sourceId === 'system-gnss-last-fix-age-ms') {
+          value = fix.lastSentenceAt ? Math.max(0, now - fix.lastSentenceAt) : null;
+        } else {
+          getLogger().warn(`Unknown GNSS system source_device_id: ${sourceId}, skipping mapping ${mapping.name}`);
+          continue;
+        }
+        if (value == null) {
+          continue;
+        }
       } else {
         getLogger().warn(`Unknown system source_device_id: ${sourceId}, skipping mapping ${mapping.name}`);
         continue;

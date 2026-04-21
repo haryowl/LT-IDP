@@ -21,6 +21,7 @@ import { EmailNotificationService } from '../electron/services/emailNotification
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { getLogger } from '../electron/services/logger';
 import { getSystemInfo } from '../electron/services/systemInfo';
+import { GnssService, type GnssConfig } from '../electron/services/gnssService';
 import { SerialPort } from 'serialport';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -58,6 +59,7 @@ let dataMapperService: DataMapperService;
 let sparingService: SparingService;
 let emailNotificationService!: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
+let gnssService: GnssService;
 
 // WebSocket broadcast (assigned after services created)
 let broadcast: (msg: { type: string; data?: any }) => void = () => {};
@@ -225,6 +227,50 @@ app.get('/api/serial-ports', authMiddleware, (req, res) => {
       logger.error('List serial ports', err?.message);
       res.status(500).json({ error: err?.message || 'Failed to list serial ports' });
     });
+});
+
+function getGnssConfig(): GnssConfig {
+  const enabled = (dbService.getSystemConfig('gnss:enabled') || '').trim() === '1';
+  const portPathRaw = (dbService.getSystemConfig('gnss:portPath') || '').trim();
+  const baudRaw = (dbService.getSystemConfig('gnss:baudRate') || '').trim();
+  const baud = Number(baudRaw);
+  return {
+    enabled,
+    portPath: portPathRaw || null,
+    baudRate: Number.isFinite(baud) ? Math.floor(baud) : 9600,
+  };
+}
+
+function setGnssConfig(next: Partial<GnssConfig>) {
+  const curr = getGnssConfig();
+  const merged: GnssConfig = {
+    enabled: typeof next.enabled === 'boolean' ? next.enabled : curr.enabled,
+    portPath: typeof next.portPath === 'string' ? next.portPath : curr.portPath,
+    baudRate: typeof next.baudRate === 'number' ? Math.floor(next.baudRate) : curr.baudRate,
+  };
+  dbService.setSystemConfig('gnss:enabled', merged.enabled ? '1' : '0');
+  dbService.setSystemConfig('gnss:portPath', merged.portPath || '');
+  dbService.setSystemConfig('gnss:baudRate', String(merged.baudRate || 9600));
+}
+
+app.get('/api/gnss/config', authMiddleware, (req, res) => {
+  res.json(getGnssConfig());
+});
+
+app.post('/api/gnss/config', authMiddleware, async (req, res) => {
+  try {
+    const body = (req.body || {}) as Partial<GnssConfig>;
+    setGnssConfig(body);
+    const cfg = getGnssConfig();
+    await gnssService.applyConfig(cfg);
+    res.json({ ok: true, config: cfg, status: gnssService.getStatus() });
+  } catch (e: any) {
+    res.status(400).json({ error: errMsg(e) });
+  }
+});
+
+app.get('/api/gnss/status', authMiddleware, (req, res) => {
+  res.json(gnssService.getStatus());
 });
 
 // ---------- MQTT ----------
@@ -583,7 +629,9 @@ server.on('upgrade', (req, socket, head) => {
   mqttPublisherService = new MqttPublisherService(dbService);
   mqttBrokerService = new MqttBrokerService(DATA_DIR);
   httpClientService = new HttpClientService(dbService);
-  dataMapperService = new DataMapperService(dbService);
+  gnssService = new GnssService(DATA_DIR);
+  await gnssService.applyConfig(getGnssConfig());
+  dataMapperService = new DataMapperService(dbService, gnssService);
   sparingService = new SparingService(dbService);
   emailNotificationService = new EmailNotificationService(dbService, () => logger.getCurrentLogFile());
   sparingService.setSendLoggedCallback((info) => {

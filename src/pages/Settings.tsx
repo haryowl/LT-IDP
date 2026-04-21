@@ -30,6 +30,7 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import LanOutlinedIcon from '@mui/icons-material/LanOutlined';
 import WifiOutlinedIcon from '@mui/icons-material/WifiOutlined';
 import LoopOutlinedIcon from '@mui/icons-material/LoopOutlined';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import SettingsEthernetOutlinedIcon from '@mui/icons-material/SettingsEthernetOutlined';
 import DeviceHubOutlinedIcon from '@mui/icons-material/DeviceHubOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -62,6 +63,32 @@ interface WifiAdapterRow {
   txRateMbps: number | null;
   dataSource: 'iw' | 'nmcli' | 'netsh' | 'none';
   message: string | null;
+}
+
+interface GnssConfig {
+  enabled: boolean;
+  portPath: string | null;
+  baudRate: number;
+}
+
+interface GnssStatus {
+  config: GnssConfig;
+  connected: boolean;
+  connecting: boolean;
+  error: string | null;
+  lastConnectAt: number | null;
+  lastDisconnectAt: number | null;
+  fix: {
+    valid: boolean;
+    latitude: number | null;
+    longitude: number | null;
+    altitudeM: number | null;
+    speedKmh: number | null;
+    satellites: number | null;
+    fixQuality: number | null;
+    lastSentenceAt: number | null;
+    lastSentenceType: string | null;
+  };
 }
 
 interface SystemInfo {
@@ -136,6 +163,11 @@ function formatDuration(sec: number): string {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function fmtCoord(v: number | null, digits = 6): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return v.toFixed(digits);
 }
 
 function usageTone(percent: number): 'success' | 'warning' | 'error' {
@@ -765,6 +797,12 @@ const Settings: React.FC = () => {
   const [sysLoading, setSysLoading] = useState(false);
   const [sysAutoRefresh, setSysAutoRefresh] = useState(false);
 
+  const [serialPorts, setSerialPorts] = useState<Array<{ path: string; manufacturer?: string }>>([]);
+  const [gnssConfig, setGnssConfig] = useState<GnssConfig>({ enabled: false, portPath: null, baudRate: 9600 });
+  const [gnssStatus, setGnssStatus] = useState<GnssStatus | null>(null);
+  const [gnssLoading, setGnssLoading] = useState(false);
+  const [gnssSaving, setGnssSaving] = useState(false);
+
   const timezoneOptions = useMemo(() => {
     const tz: string[] = [];
     for (let offset = -12; offset <= 14; offset++) {
@@ -787,10 +825,34 @@ const Settings: React.FC = () => {
     }
   }, []);
 
+  const loadSerialPorts = useCallback(async () => {
+    try {
+      const list = await api.modbus?.listSerialPorts?.();
+      setSerialPorts(Array.isArray(list) ? list : []);
+    } catch {
+      setSerialPorts([]);
+    }
+  }, []);
+
+  const loadGnss = useCallback(async () => {
+    try {
+      setGnssLoading(true);
+      const [cfg, st] = await Promise.all([api.gnss?.getConfig?.(), api.gnss?.getStatus?.()]);
+      if (cfg) setGnssConfig(cfg as GnssConfig);
+      if (st) setGnssStatus(st as GnssStatus);
+    } catch {
+      // GNSS endpoints exist only in web mode
+    } finally {
+      setGnssLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadSettings();
     loadTimestampMapping();
     loadSystemInfo();
+    loadSerialPorts();
+    loadGnss();
     if (role === 'admin') loadReadOnlyToken();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only
   }, []);
@@ -800,6 +862,32 @@ const Settings: React.FC = () => {
     const id = window.setInterval(() => loadSystemInfo(), 30000);
     return () => window.clearInterval(id);
   }, [sysAutoRefresh, loadSystemInfo]);
+
+  useEffect(() => {
+    if (!gnssConfig.enabled) return;
+    const id = window.setInterval(() => {
+      api.gnss
+        ?.getStatus?.()
+        .then((st) => setGnssStatus((st as GnssStatus) || null))
+        .catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [gnssConfig.enabled]);
+
+  const saveGnssConfig = async () => {
+    try {
+      setGnssSaving(true);
+      const res: any = await api.gnss?.saveConfig?.(gnssConfig);
+      if (res?.config) setGnssConfig(res.config);
+      if (res?.status) setGnssStatus(res.status);
+      setSuccess('GNSS settings saved');
+      setTimeout(() => setSuccess(''), 2500);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save GNSS config');
+    } finally {
+      setGnssSaving(false);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -941,6 +1029,24 @@ const Settings: React.FC = () => {
     }
   };
 
+  const fix = gnssStatus?.fix;
+  const hasCoords = !!(fix && typeof fix.latitude === 'number' && typeof fix.longitude === 'number');
+  const lat = hasCoords ? (fix!.latitude as number) : null;
+  const lon = hasCoords ? (fix!.longitude as number) : null;
+  const bboxDelta = 0.02;
+  const osmEmbedUrl =
+    hasCoords && lat != null && lon != null
+      ? `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(
+          `${lon - bboxDelta},${lat - bboxDelta},${lon + bboxDelta},${lat + bboxDelta}`
+        )}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lon}`)}`
+      : null;
+  const osmLinkUrl =
+    hasCoords && lat != null && lon != null
+      ? `https://www.openstreetmap.org/?mlat=${encodeURIComponent(String(lat))}&mlon=${encodeURIComponent(
+          String(lon)
+        )}#map=15/${encodeURIComponent(String(lat))}/${encodeURIComponent(String(lon))}`
+      : null;
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -997,6 +1103,164 @@ const Settings: React.FC = () => {
         sysAutoRefresh={sysAutoRefresh}
         setSysAutoRefresh={setSysAutoRefresh}
       />
+
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <Avatar sx={{ bgcolor: (t) => alpha(t.palette.info.main, 0.14), color: 'info.dark' }}>
+              <GpsFixedIcon />
+            </Avatar>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                GNSS (USB)
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                BEITIAN BS-708 (NMEA) — latitude/longitude + map
+              </Typography>
+            </Box>
+          </Stack>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Button size="small" variant="outlined" onClick={loadSerialPorts} disabled={gnssLoading}>
+              Refresh ports
+            </Button>
+            <Button size="small" variant="outlined" onClick={loadGnss} disabled={gnssLoading}>
+              Refresh status
+            </Button>
+          </Stack>
+        </Box>
+        <Divider sx={{ mb: 2 }} />
+
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={5}>
+            <Stack spacing={2}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={gnssConfig.enabled}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, enabled: e.target.checked }))}
+                  />
+                }
+                label="Enable GNSS reader"
+              />
+
+              <Autocomplete
+                options={serialPorts}
+                getOptionLabel={(o) => (o?.manufacturer ? `${o.path} — ${o.manufacturer}` : o.path)}
+                value={serialPorts.find((p) => p.path === gnssConfig.portPath) || (gnssConfig.portPath ? { path: gnssConfig.portPath } : null)}
+                onChange={(_, v) => setGnssConfig((p) => ({ ...p, portPath: (v as any)?.path || null }))}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Serial port"
+                    helperText="Select the USB GNSS serial device (e.g. /dev/ttyACM0)"
+                  />
+                )}
+              />
+
+              <TextField
+                label="Baud rate"
+                type="number"
+                value={gnssConfig.baudRate}
+                onChange={(e) => setGnssConfig((p) => ({ ...p, baudRate: Number(e.target.value || 0) }))}
+                inputProps={{ min: 4800, max: 921600, step: 100 }}
+                helperText="BS-708 is typically 9600"
+              />
+
+              <Box>
+                <Button variant="contained" onClick={saveGnssConfig} disabled={gnssSaving || gnssLoading} disableElevation>
+                  {gnssSaving ? 'Saving…' : 'Save GNSS settings'}
+                </Button>
+              </Box>
+
+              <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                    Status
+                  </Typography>
+                  {gnssStatus ? (
+                    <Stack spacing={1}>
+                      <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                        <Chip
+                          size="small"
+                          color={gnssStatus.connected ? 'success' : gnssStatus.connecting ? 'warning' : 'default'}
+                          label={gnssStatus.connected ? 'Connected' : gnssStatus.connecting ? 'Connecting…' : 'Disconnected'}
+                          sx={{ fontWeight: 600 }}
+                        />
+                        {fix?.valid ? (
+                          <Chip size="small" color="success" label="Fix valid" variant="outlined" />
+                        ) : (
+                          <Chip size="small" label="No valid fix" variant="outlined" />
+                        )}
+                        {fix?.satellites != null && <Chip size="small" label={`Sat: ${fix.satellites}`} variant="outlined" />}
+                        {fix?.lastSentenceType && <Chip size="small" label={`NMEA: ${fix.lastSentenceType}`} variant="outlined" />}
+                      </Stack>
+                      {gnssStatus.error && <Alert severity="warning">{gnssStatus.error}</Alert>}
+                      <Typography variant="body2" color="text.secondary">
+                        Lat: <strong>{fmtCoord(fix?.latitude ?? null)}</strong> · Lon: <strong>{fmtCoord(fix?.longitude ?? null)}</strong>
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Alt: {fix?.altitudeM != null ? `${fix.altitudeM.toFixed(1)} m` : '—'} · Speed:{' '}
+                        {fix?.speedKmh != null ? `${fix.speedKmh.toFixed(1)} km/h` : '—'} · Fix quality:{' '}
+                        {fix?.fixQuality != null ? fix.fixQuality : '—'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Last update:{' '}
+                        {fix?.lastSentenceAt ? new Date(fix.lastSentenceAt).toLocaleString() : '—'}
+                      </Typography>
+                    </Stack>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      GNSS status is available only in web mode.
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Stack>
+          </Grid>
+
+          <Grid item xs={12} md={7}>
+            <Card variant="outlined" sx={{ borderRadius: 2, height: '100%' }}>
+              <CardContent sx={{ p: 0, height: '100%' }}>
+                {osmEmbedUrl ? (
+                  <Box sx={{ position: 'relative', width: '100%', height: { xs: 320, md: 420 } }}>
+                    <Box
+                      component="iframe"
+                      title="GNSS map"
+                      src={osmEmbedUrl}
+                      sx={{ border: 0, width: '100%', height: '100%', borderRadius: 2 }}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                    <Box sx={{ position: 'absolute', right: 10, top: 10, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      {osmLinkUrl && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          href={osmLinkUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          disableElevation
+                        >
+                          Open map
+                        </Button>
+                      )}
+                    </Box>
+                  </Box>
+                ) : (
+                  <Box sx={{ p: 2.5 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                      Map
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Connect GNSS and wait for a valid fix to show the map.
+                    </Typography>
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>

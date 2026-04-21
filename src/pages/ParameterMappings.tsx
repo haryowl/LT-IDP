@@ -194,6 +194,46 @@ const ParameterMappings: React.FC = () => {
         label: 'HTTP publisher — failed requests',
         description: 'Total failed HTTP publisher requests since app start. Data type: number.',
       },
+      {
+        id: 'system-gnss-latitude',
+        label: 'GNSS — latitude (deg)',
+        description: 'Latitude in decimal degrees from the USB GNSS receiver. Data type: number.',
+      },
+      {
+        id: 'system-gnss-longitude',
+        label: 'GNSS — longitude (deg)',
+        description: 'Longitude in decimal degrees from the USB GNSS receiver. Data type: number.',
+      },
+      {
+        id: 'system-gnss-altitude-m',
+        label: 'GNSS — altitude (m)',
+        description: 'Altitude above mean sea level (meters). Data type: number.',
+      },
+      {
+        id: 'system-gnss-speed-kmh',
+        label: 'GNSS — speed (km/h)',
+        description: 'Speed over ground (km/h). Data type: number.',
+      },
+      {
+        id: 'system-gnss-satellites',
+        label: 'GNSS — satellites used',
+        description: 'Number of satellites used in the fix. Data type: number.',
+      },
+      {
+        id: 'system-gnss-fix-quality',
+        label: 'GNSS — fix quality',
+        description: 'GGA fix quality (0 = invalid, 1 = GPS, 2 = DGPS, ...). Data type: number.',
+      },
+      {
+        id: 'system-gnss-fix-valid',
+        label: 'GNSS — fix valid',
+        description: 'Boolean indicating if the current fix is valid. Data type: boolean.',
+      },
+      {
+        id: 'system-gnss-last-fix-age-ms',
+        label: 'GNSS — last fix age (ms)',
+        description: 'Milliseconds since the last NMEA sentence that updated the fix. Data type: number.',
+      },
     ],
     []
   );
