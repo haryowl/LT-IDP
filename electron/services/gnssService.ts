@@ -6,6 +6,8 @@ export type GnssConfig = {
   enabled: boolean;
   portPath: string | null;
   baudRate: number;
+  /** Used only to throttle history storage for system-gnss-* mappings */
+  historyIntervalSeconds?: number;
 };
 
 export type GnssFix = {

@@ -69,6 +69,7 @@ interface GnssConfig {
   enabled: boolean;
   portPath: string | null;
   baudRate: number;
+  historyIntervalSeconds?: number;
 }
 
 interface GnssStatus {
@@ -798,7 +799,12 @@ const Settings: React.FC = () => {
   const [sysAutoRefresh, setSysAutoRefresh] = useState(false);
 
   const [serialPorts, setSerialPorts] = useState<Array<{ path: string; manufacturer?: string }>>([]);
-  const [gnssConfig, setGnssConfig] = useState<GnssConfig>({ enabled: false, portPath: null, baudRate: 9600 });
+  const [gnssConfig, setGnssConfig] = useState<GnssConfig>({
+    enabled: false,
+    portPath: null,
+    baudRate: 9600,
+    historyIntervalSeconds: 5,
+  });
   const [gnssStatus, setGnssStatus] = useState<GnssStatus | null>(null);
   const [gnssLoading, setGnssLoading] = useState(false);
   const [gnssSaving, setGnssSaving] = useState(false);
@@ -1164,6 +1170,17 @@ const Settings: React.FC = () => {
                 onChange={(e) => setGnssConfig((p) => ({ ...p, baudRate: Number(e.target.value || 0) }))}
                 inputProps={{ min: 4800, max: 921600, step: 100 }}
                 helperText="BS-708 is typically 9600"
+              />
+
+              <TextField
+                label="History store interval (seconds)"
+                type="number"
+                value={gnssConfig.historyIntervalSeconds ?? 5}
+                onChange={(e) =>
+                  setGnssConfig((p) => ({ ...p, historyIntervalSeconds: Number(e.target.value || 0) || 1 }))
+                }
+                inputProps={{ min: 1, max: 3600, step: 1 }}
+                helperText="How often GNSS mappings are written to historical data (realtime updates can be faster)"
               />
 
               <Box>

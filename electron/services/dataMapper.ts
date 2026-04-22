@@ -9,13 +9,22 @@ export class DataMapperService extends EventEmitter {
   private mappings: Map<string, ParameterMapping> = new Map();
   private callbacks: Set<(data: RealtimeData) => void> = new Set();
   private systemTimestampIntervalMs: number;
+  private systemGnssHistoryIntervalMs: number;
   private lastStoredTimestamps: Map<string, number> = new Map();
 
   constructor(private db: DatabaseService, private gnss?: GnssService) {
     super();
     this.loadMappings();
     this.systemTimestampIntervalMs = Math.max(1, this.db.getSystemTimestampInterval()) * 1000;
+    this.systemGnssHistoryIntervalMs = Math.max(1, this.getGnssHistoryIntervalSeconds()) * 1000;
     this.startSystemDataEmitter();
+  }
+
+  private getGnssHistoryIntervalSeconds(): number {
+    const raw = this.db.getSystemConfig?.('gnss:historyIntervalSeconds');
+    const n = Number((raw ?? '').trim());
+    if (!Number.isFinite(n) || n <= 0) return 5;
+    return Math.max(1, Math.floor(n));
   }
 
   private shouldStoreHistorical(mapping: ParameterMapping, timestamp: number, sourceId?: string): boolean {
@@ -23,6 +32,8 @@ export class DataMapperService extends EventEmitter {
 
     if (mapping.sourceType === 'system' && (sourceId || mapping.sourceDeviceId || 'system-timestamp') === 'system-timestamp') {
       intervalMs = this.systemTimestampIntervalMs;
+    } else if (mapping.sourceType === 'system' && String(sourceId || mapping.sourceDeviceId || '').startsWith('system-gnss-')) {
+      intervalMs = this.systemGnssHistoryIntervalMs;
     } else if (mapping.sourceType === 'modbus') {
       const device = this.db.getModbusDeviceById(mapping.sourceDeviceId);
       intervalMs = device?.recordInterval ?? undefined;
@@ -397,6 +408,7 @@ export class DataMapperService extends EventEmitter {
 
   setSystemTimestampInterval(seconds: number): void {
     this.systemTimestampIntervalMs = Math.max(1, Math.floor(seconds)) * 1000;
+    this.systemGnssHistoryIntervalMs = Math.max(1, this.getGnssHistoryIntervalSeconds()) * 1000;
     this.lastStoredTimestamps.clear();
   }
 

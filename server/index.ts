@@ -234,23 +234,31 @@ function getGnssConfig(): GnssConfig {
   const portPathRaw = (dbService.getSystemConfig('gnss:portPath') || '').trim();
   const baudRaw = (dbService.getSystemConfig('gnss:baudRate') || '').trim();
   const baud = Number(baudRaw);
+  const histRaw = (dbService.getSystemConfig('gnss:historyIntervalSeconds') || '').trim();
+  const hist = Number(histRaw);
   return {
     enabled,
     portPath: portPathRaw || null,
     baudRate: Number.isFinite(baud) ? Math.floor(baud) : 9600,
+    historyIntervalSeconds: Number.isFinite(hist) ? Math.max(1, Math.floor(hist)) : 5,
   };
 }
 
 function setGnssConfig(next: Partial<GnssConfig>) {
   const curr = getGnssConfig();
-  const merged: GnssConfig = {
+  const merged: any = {
     enabled: typeof next.enabled === 'boolean' ? next.enabled : curr.enabled,
     portPath: typeof next.portPath === 'string' ? next.portPath : curr.portPath,
     baudRate: typeof next.baudRate === 'number' ? Math.floor(next.baudRate) : curr.baudRate,
+    historyIntervalSeconds:
+      typeof (next as any).historyIntervalSeconds === 'number'
+        ? Math.max(1, Math.floor((next as any).historyIntervalSeconds))
+        : (curr as any).historyIntervalSeconds ?? 5,
   };
   dbService.setSystemConfig('gnss:enabled', merged.enabled ? '1' : '0');
   dbService.setSystemConfig('gnss:portPath', merged.portPath || '');
   dbService.setSystemConfig('gnss:baudRate', String(merged.baudRate || 9600));
+  dbService.setSystemConfig('gnss:historyIntervalSeconds', String(merged.historyIntervalSeconds || 5));
 }
 
 app.get('/api/gnss/config', authMiddleware, (req, res) => {
