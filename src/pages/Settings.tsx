@@ -264,8 +264,8 @@ function SystemHealthSection({
     <Paper
       elevation={0}
       sx={{
-        p: { xs: 2, sm: 3 },
-        mb: 3,
+        p: { xs: 1.5, sm: 2 },
+        mb: 2,
         borderRadius: 2,
         border: '1px solid',
         borderColor: alpha(theme.palette.divider, 0.14),
@@ -288,12 +288,18 @@ function SystemHealthSection({
         />
       )}
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 2 }}>
-        <Stack direction="row" spacing={1.5} alignItems="center">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={1.25}
+        justifyContent="space-between"
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        sx={{ mb: 1.25 }}
+      >
+        <Stack direction="row" spacing={1.25} alignItems="center">
           <Avatar
             sx={{
-              width: 44,
-              height: 44,
+              width: 36,
+              height: 36,
               bgcolor: alpha(theme.palette.primary.main, 0.14),
               color: 'primary.main',
             }}
@@ -309,7 +315,13 @@ function SystemHealthSection({
             </Typography>
           </Box>
         </Stack>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent={{ xs: 'flex-start', sm: 'flex-end' }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          flexWrap="wrap"
+          justifyContent={{ xs: 'flex-start', sm: 'flex-end' }}
+        >
           <FormControlLabel
             control={<Switch checked={sysAutoRefresh} onChange={(e) => setSysAutoRefresh(e.target.checked)} size="small" />}
             label={<Typography variant="body2">Auto-refresh · 30s</Typography>}
@@ -321,27 +333,38 @@ function SystemHealthSection({
         </Stack>
       </Stack>
 
-      <Alert severity="info" icon={<InfoOutlinedIcon />} sx={{ mb: 2.5, py: 0.5, borderRadius: 2, bgcolor: alpha(theme.palette.info.main, 0.06), border: '1px solid', borderColor: alpha(theme.palette.info.main, 0.12) }}>
+      <Alert
+        severity="info"
+        icon={<InfoOutlinedIcon />}
+        sx={{
+          mb: 1.5,
+          py: 0.5,
+          borderRadius: 2,
+          bgcolor: alpha(theme.palette.info.main, 0.06),
+          border: '1px solid',
+          borderColor: alpha(theme.palette.info.main, 0.12),
+        }}
+      >
         <Typography variant="body2">
           Memory and CPU reflect this machine. <strong>Data volume</strong> shows the filesystem that holds your app data (database and exports).
         </Typography>
       </Alert>
 
       {sysLoading && !systemInfo ? (
-        <Box sx={{ py: 4 }}>
+        <Box sx={{ py: 3 }}>
           <LinearProgress sx={{ borderRadius: 2, height: 8 }} />
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>
             Loading system metrics…
           </Typography>
         </Box>
       ) : systemInfo ? (
-        <Stack spacing={2.5}>
-          <Grid container spacing={2}>
+        <Stack spacing={1.75}>
+          <Grid container spacing={1.5}>
             <Grid item xs={12} md={6}>
               <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
-                <CardContent sx={{ p: 2.5 }}>
-                  <Stack direction="row" spacing={2} alignItems="flex-start">
-                    <Avatar sx={{ bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', width: 48, height: 48 }}>
+                <CardContent sx={{ p: 1.75 }}>
+                  <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                    <Avatar sx={{ bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', width: 40, height: 40 }}>
                       <ComputerOutlinedIcon />
                     </Avatar>
                     <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -365,16 +388,16 @@ function SystemHealthSection({
             </Grid>
             <Grid item xs={12} md={6}>
               <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
-                <CardContent sx={{ p: 2.5 }}>
-                  <Stack direction="row" spacing={2} alignItems="flex-start">
-                    <Avatar sx={{ bgcolor: alpha(theme.palette.secondary.main, 0.15), color: 'secondary.main', width: 48, height: 48 }}>
+                <CardContent sx={{ p: 1.75 }}>
+                  <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                    <Avatar sx={{ bgcolor: alpha(theme.palette.secondary.main, 0.15), color: 'secondary.main', width: 40, height: 40 }}>
                       <AccessTimeOutlinedIcon />
                     </Avatar>
                     <Box sx={{ flex: 1 }}>
                       <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.5 }}>
                         Uptime
                       </Typography>
-                      <Grid container spacing={2} sx={{ mt: 0.5 }}>
+                      <Grid container spacing={1.25} sx={{ mt: 0.5 }}>
                         <Grid item xs={6}>
                           <Typography variant="caption" color="text.secondary" display="block">
                             App process
@@ -392,7 +415,7 @@ function SystemHealthSection({
                           </Typography>
                         </Grid>
                       </Grid>
-                      <Divider sx={{ my: 2 }} />
+                      <Divider sx={{ my: 1.5 }} />
                       <Stack direction="row" spacing={1.5} alignItems="center">
                         <Avatar sx={{ width: 36, height: 36, bgcolor: alpha(theme.palette.warning.main, 0.12), color: 'warning.dark' }}>
                           <SpeedOutlinedIcon fontSize="small" />
@@ -431,10 +454,10 @@ function SystemHealthSection({
 
             <Grid item xs={12} md={6}>
               <Card variant="outlined" sx={{ height: '100%', borderRadius: 2, borderColor: alpha(theme.palette.divider, 0.12) }}>
-                <CardContent sx={{ p: 2.5 }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1.5 }}>
-                    <Stack direction="row" spacing={1.5} alignItems="center">
-                      <Avatar sx={{ bgcolor: alpha(theme.palette.info.main, 0.14), color: 'info.dark', width: 44, height: 44 }}>
+                <CardContent sx={{ p: 1.75 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
+                    <Stack direction="row" spacing={1.25} alignItems="center">
+                      <Avatar sx={{ bgcolor: alpha(theme.palette.info.main, 0.14), color: 'info.dark', width: 38, height: 38 }}>
                         <MemoryOutlinedIcon />
                       </Avatar>
                       <Box>
@@ -530,19 +553,19 @@ function SystemHealthSection({
 
           {systemInfo.network && (
             <Box>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 1 }}>
                 <HubOutlinedIcon color="action" />
                 <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                   Network interfaces
                 </Typography>
               </Stack>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 Wi‑Fi hardware uses udev (Linux) or the adapter description from <code>netsh</code> (Windows). SSID, BSSID, and signal use <code>iw</code>, NetworkManager, or <code>netsh</code> when those tools are available.
               </Typography>
-              <Grid container spacing={1.5} sx={{ mb: 2 }}>
+              <Grid container spacing={1.25} sx={{ mb: 1.5 }}>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
-                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                    <CardContent sx={{ py: 1.25, px: 1.5 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
                         MAC addresses
                       </Typography>
@@ -557,7 +580,7 @@ function SystemHealthSection({
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
-                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                    <CardContent sx={{ py: 1.25, px: 1.5 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
                         Interfaces in use
                       </Typography>
@@ -572,7 +595,7 @@ function SystemHealthSection({
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
-                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                    <CardContent sx={{ py: 1.25, px: 1.5 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
                         Ethernet (wired)
                       </Typography>
@@ -589,7 +612,7 @@ function SystemHealthSection({
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.5), height: '100%' }}>
-                    <CardContent sx={{ py: 1.75, px: 2 }}>
+                    <CardContent sx={{ py: 1.25, px: 1.5 }}>
                       <Typography variant="caption" color="text.secondary" fontWeight={600}>
                         Wireless (Wi‑Fi)
                       </Typography>
@@ -606,7 +629,7 @@ function SystemHealthSection({
                 </Grid>
               </Grid>
 
-              <Stack spacing={1.25}>
+              <Stack spacing={1}>
                 {sortedIfaces.map((iface) => {
                   const wf = iface.portKind === 'wireless' ? wifiByName.get(iface.name) : undefined;
                   return (
@@ -619,10 +642,10 @@ function SystemHealthSection({
                       bgcolor: iface.inUse ? alpha(theme.palette.success.main, 0.03) : alpha(theme.palette.action.hover, 0.04),
                     }}
                   >
-                    <CardContent sx={{ py: 2, px: 2.25, '&:last-child': { pb: 2 } }}>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }}>
-                        <Stack direction="row" spacing={1.5} alignItems="center">
-                          <Avatar sx={{ width: 40, height: 40, bgcolor: alpha(theme.palette.text.primary, 0.07) }}>{ifaceKindIcon(iface.portKind)}</Avatar>
+                    <CardContent sx={{ py: 1.5, px: 1.75, '&:last-child': { pb: 1.5 } }}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                        <Stack direction="row" spacing={1.25} alignItems="center">
+                          <Avatar sx={{ width: 34, height: 34, bgcolor: alpha(theme.palette.text.primary, 0.07) }}>{ifaceKindIcon(iface.portKind)}</Avatar>
                           <Box>
                             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                               {iface.name}
@@ -642,7 +665,7 @@ function SystemHealthSection({
                           variant={iface.inUse ? 'filled' : 'outlined'}
                         />
                       </Stack>
-                      <Stack spacing={0.75} sx={{ mt: 2, pl: { sm: 6.5 } }}>
+                      <Stack spacing={0.5} sx={{ mt: 1.25, pl: { sm: 5.75 } }}>
                         <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem' }}>
                           <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 52 }}>
                             MAC
@@ -667,8 +690,8 @@ function SystemHealthSection({
                         )}
                         {wf && (
                           <>
-                            <Divider sx={{ my: 1.5 }} />
-                            <Typography variant="caption" color="text.secondary" fontWeight={700} letterSpacing={0.4} display="block" sx={{ mb: 1 }}>
+                            <Divider sx={{ my: 1 }} />
+                            <Typography variant="caption" color="text.secondary" fontWeight={700} letterSpacing={0.4} display="block" sx={{ mb: 0.75 }}>
                               Wi‑Fi hardware &amp; association
                             </Typography>
                             {wf.hardwareDescription && (
@@ -684,7 +707,7 @@ function SystemHealthSection({
                                 {wf.hardwareDetail}
                               </Typography>
                             )}
-                            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
+                            <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ mb: 0.75 }}>
                               <Chip
                                 size="small"
                                 label={wf.connected ? 'Associated to AP' : 'Not associated'}
@@ -1093,12 +1116,12 @@ const Settings: React.FC = () => {
         </Alert>
       )}
 
-      <Paper sx={{ p: 3, mb: 3 }}>
+      <Paper sx={{ p: 2, mb: 2 }}>
         <Typography variant="h6" gutterBottom>
           System Identification
         </Typography>
-        <Divider sx={{ mb: 3 }} />
-        <Grid container spacing={3}>
+        <Divider sx={{ mb: 2 }} />
+        <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <TextField
               label="Client ID"
@@ -1109,7 +1132,7 @@ const Settings: React.FC = () => {
             />
           </Grid>
         </Grid>
-        <Box sx={{ mt: 3 }}>
+        <Box sx={{ mt: 2 }}>
           <Button
             variant="contained"
             startIcon={<SaveIcon />}
@@ -1129,9 +1152,9 @@ const Settings: React.FC = () => {
         setSysAutoRefresh={setSysAutoRefresh}
       />
 
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
-          <Stack direction="row" spacing={1.5} alignItems="center">
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.25} mb={1.25}>
+          <Stack direction="row" spacing={1.25} alignItems="center">
             <Avatar sx={{ bgcolor: (t) => alpha(t.palette.info.main, 0.14), color: 'info.dark' }}>
               <GpsFixedIcon />
             </Avatar>
@@ -1153,11 +1176,11 @@ const Settings: React.FC = () => {
             </Button>
           </Stack>
         </Box>
-        <Divider sx={{ mb: 2 }} />
+        <Divider sx={{ mb: 1.5 }} />
 
-        <Grid container spacing={2}>
+        <Grid container spacing={1.5}>
           <Grid item xs={12} md={5}>
-            <Stack spacing={2}>
+            <Stack spacing={1.25}>
               <FormControlLabel
                 control={
                   <Switch
@@ -1215,7 +1238,7 @@ const Settings: React.FC = () => {
                 }
                 label="Enable GNSS filtering"
               />
-              <Grid container spacing={2}>
+              <Grid container spacing={1.5}>
                 <Grid item xs={6}>
                   <TextField
                     label="Min satellites"
@@ -1292,7 +1315,7 @@ const Settings: React.FC = () => {
               </Box>
 
               <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
                     Status
                   </Typography>
