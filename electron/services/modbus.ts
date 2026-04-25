@@ -371,6 +371,209 @@ export class ModbusService extends EventEmitter {
     }
   }
 
+  private static readonly BYTE_ORDER_INDICES: Record<string, number[]> = {
+    ABCD: [0, 1, 2, 3],
+    BADC: [1, 0, 3, 2],
+    CDAB: [2, 3, 0, 1],
+    DCBA: [3, 2, 1, 0],
+  };
+
+  /**
+   * Write a value to a configured coil block (FC1) or holding register (FC3).
+   * Uses the same connection as polling (TCP or RTU). Inverse scale/offset and byte/word order match reads.
+   */
+  async writeMappedRegister(deviceId: string, registerId: string, value: unknown): Promise<void> {
+    const connection = this.connections.get(deviceId);
+    if (!connection?.client?.isOpen) {
+      throw new Error('Modbus device is not connected. Connect the device before writing.');
+    }
+    const register = this.db.getModbusRegisterById(registerId);
+    if (!register || register.deviceId !== deviceId) {
+      throw new Error('Register not found for this device.');
+    }
+    if (register.functionCode !== 1 && register.functionCode !== 3) {
+      throw new Error('Writes are only supported for coils (FC1) and holding registers (FC3).');
+    }
+    const client = connection.client;
+    if (register.functionCode === 1) {
+      await this.writeCoilsFromRegister(client, register, value);
+    } else {
+      await this.writeHoldingFromRegister(client, register, value);
+    }
+    this.emit('write', {
+      deviceId,
+      registerId,
+      registerName: register.name,
+      value,
+      timestamp: Date.now(),
+    });
+  }
+
+  private normalizeCoilScalar(value: unknown): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const s = value.trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'on') return true;
+      if (s === 'false' || s === '0' || s === 'off' || s === '') return false;
+    }
+    throw new Error('Coil value must be boolean, 0/1, or true/false.');
+  }
+
+  private async writeCoilsFromRegister(client: ModbusRTU, register: ModbusRegister, value: unknown): Promise<void> {
+    const q = Math.max(1, register.quantity | 0);
+    let bits: boolean[];
+    if (q === 1) {
+      bits = [this.normalizeCoilScalar(value)];
+    } else {
+      if (!Array.isArray(value)) {
+        throw new Error(`This coil register spans ${q} bits; send a JSON array of ${q} booleans or 0/1 values.`);
+      }
+      if (value.length !== q) {
+        throw new Error(`Expected ${q} coil values, got ${value.length}.`);
+      }
+      bits = value.map((v) => this.normalizeCoilScalar(v));
+    }
+    if (bits.length === 1) {
+      await client.writeCoil(register.address, bits[0]);
+    } else {
+      await client.writeCoils(register.address, bits);
+    }
+  }
+
+  private async writeHoldingFromRegister(client: ModbusRTU, register: ModbusRegister, value: unknown): Promise<void> {
+    const words = this.encodeHoldingRegisterWords(register, value);
+    if (words.length === 1) {
+      await client.writeRegister(register.address, words[0]);
+    } else {
+      await client.writeRegisters(register.address, words);
+    }
+  }
+
+  private inverseScaleForWrite(register: ModbusRegister, scaled: number): number {
+    let v = scaled;
+    const sf = register.scaleFactor;
+    const off = register.offset;
+    if (sf != null && sf !== 0) {
+      v = (v - (off ?? 0)) / sf;
+    } else if (off != null && off !== 0) {
+      v = v - off;
+    }
+    return v;
+  }
+
+  private canonical4ByteBufferToWords(register: ModbusRegister, canonicalBuffer: Buffer): number[] {
+    const byteOrder = (register.byteOrder || 'ABCD').toUpperCase();
+    const indices = ModbusService.BYTE_ORDER_INDICES[byteOrder] || ModbusService.BYTE_ORDER_INDICES.ABCD;
+    const staged = Buffer.alloc(4);
+    for (let i = 0; i < 4; i++) {
+      staged[indices[i]] = canonicalBuffer[i];
+    }
+    let w0 = (staged[0] << 8) | staged[1];
+    let w1 = (staged[2] << 8) | staged[3];
+    if ((register.wordOrder || 'BE').toUpperCase() === 'LE') {
+      const t = w0;
+      w0 = w1;
+      w1 = t;
+    }
+    return [w0 & 0xffff, w1 & 0xffff];
+  }
+
+  private canonical8ByteBufferToWords(register: ModbusRegister, canonicalBuffer: Buffer): number[] {
+    const byteOrder = (register.byteOrder || 'ABCD').toUpperCase();
+    const indices = ModbusService.BYTE_ORDER_INDICES[byteOrder] || ModbusService.BYTE_ORDER_INDICES.ABCD;
+    const staged = Buffer.alloc(8);
+    for (let chunk = 0; chunk < 8; chunk += 4) {
+      for (let i = 0; i < 4; i++) {
+        staged[chunk + indices[i]] = canonicalBuffer[chunk + i];
+      }
+    }
+    const words: number[] = [];
+    for (let i = 0; i < 8; i += 2) {
+      words.push(((staged[i] << 8) | staged[i + 1]) & 0xffff);
+    }
+    if ((register.wordOrder || 'BE').toUpperCase() === 'LE') {
+      for (let i = 0; i < words.length; i += 2) {
+        if (i + 1 < words.length) {
+          const t = words[i];
+          words[i] = words[i + 1];
+          words[i + 1] = t;
+        }
+      }
+    }
+    return words;
+  }
+
+  private encodeHoldingRegisterWords(register: ModbusRegister, value: unknown): number[] {
+    const dt = (register.dataType || 'uint16').toLowerCase();
+    const q = Math.max(1, register.quantity | 0);
+
+    if (dt === 'bool') {
+      if (q !== 1) {
+        throw new Error('Boolean holding writes require quantity 1.');
+      }
+      const n = this.normalizeCoilScalar(value) ? 1 : 0;
+      return [n];
+    }
+
+    if (typeof value !== 'number' && typeof value !== 'string') {
+      throw new Error('Holding register write value must be a number (or numeric string).');
+    }
+    const num = typeof value === 'number' ? value : parseFloat(String(value).trim());
+    if (!Number.isFinite(num)) {
+      throw new Error('Invalid numeric value for Modbus write.');
+    }
+
+    const raw = this.inverseScaleForWrite(register, num);
+
+    switch (dt) {
+      case 'int16': {
+        if (q !== 1) throw new Error('int16 write requires quantity 1.');
+        const w = raw | 0;
+        if (w < -32768 || w > 32767) throw new Error('int16 value out of range.');
+        return [w & 0xffff];
+      }
+      case 'uint16': {
+        if (q !== 1) throw new Error('uint16 write requires quantity 1.');
+        const w = Math.round(raw);
+        if (w < 0 || w > 65535) throw new Error('uint16 value out of range.');
+        return [w];
+      }
+      case 'int32':
+      case 'uint32':
+      case 'float': {
+        if (q !== 2) {
+          throw new Error(`${dt} writes require quantity 2 (two 16-bit registers).`);
+        }
+        const buf = Buffer.alloc(4);
+        if (dt === 'int32') {
+          const v = Math.round(raw) | 0;
+          if (v < -2147483648 || v > 2147483647) throw new Error('int32 value out of range.');
+          buf.writeInt32BE(v, 0);
+        } else if (dt === 'uint32') {
+          const v = Math.round(raw);
+          if (v < 0 || v > 0xffffffff) throw new Error('uint32 value out of range.');
+          buf.writeUInt32BE(v >>> 0, 0);
+        } else {
+          buf.writeFloatBE(Number(raw), 0);
+        }
+        return this.canonical4ByteBufferToWords(register, buf);
+      }
+      case 'double': {
+        if (q !== 4) {
+          throw new Error('double writes require quantity 4 (four 16-bit registers).');
+        }
+        const buf = Buffer.alloc(8);
+        buf.writeDoubleBE(Number(raw), 0);
+        return this.canonical8ByteBufferToWords(register, buf);
+      }
+      default:
+        throw new Error(
+          `Holding register writes for data type "${register.dataType}" are not supported. Use uint16, int16, int32, uint32, float, double, or bool.`
+        );
+    }
+  }
+
   private parseData(data: number[], register: ModbusRegister): any {
     let value: any;
     switch (register.dataType) {

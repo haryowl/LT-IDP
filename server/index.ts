@@ -222,6 +222,18 @@ app.post('/api/modbus/disconnect', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/modbus/status', authMiddleware, (req, res) => res.json(modbusService.getConnectionStatus()));
+app.post('/api/modbus/write', authMiddleware, async (req, res) => {
+  try {
+    const { deviceId, registerId, value } = req.body || {};
+    if (!deviceId || !registerId || value === undefined) {
+      return res.status(400).json({ error: 'deviceId, registerId, and value are required' });
+    }
+    await modbusService.writeMappedRegister(deviceId, registerId, value);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
 app.get('/api/serial-ports', authMiddleware, (req, res) => {
   SerialPort.list()
     .then((ports) => res.json(ports.map((p: any) => ({ path: p.path, manufacturer: p.manufacturer, serialNumber: p.serialNumber }))))

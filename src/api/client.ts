@@ -159,6 +159,10 @@ export const api = {
     connect: (deviceId: string) => (isElectron ? (window as any).electronAPI.modbus.connect(deviceId) : request('POST', '/modbus/connect', { deviceId })),
     disconnect: (deviceId: string) => (isElectron ? (window as any).electronAPI.modbus.disconnect(deviceId) : request('POST', '/modbus/disconnect', { deviceId })),
     getStatus: () => (isElectron ? (window as any).electronAPI.modbus.getStatus() : request('GET', '/modbus/status')),
+    write: (payload: { deviceId: string; registerId: string; value: unknown }) =>
+      isElectron
+        ? (window as any).electronAPI.modbus.write(payload)
+        : request<{ ok: boolean }>('POST', '/modbus/write', payload),
     listSerialPorts: () => (isElectron ? (window as any).electronAPI.modbus.listSerialPorts() : request<{ path: string; manufacturer?: string }[]>('GET', '/serial-ports')),
   },
   mqtt: {

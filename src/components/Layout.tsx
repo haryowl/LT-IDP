@@ -37,7 +37,7 @@ import {
 import { useAuthStore, type UserRole } from '../store/authStore';
 import api from '../api/client';
 
-const drawerWidth = 260;
+const drawerWidth = 240;
 
 type MenuItem = {
   text: string;
@@ -110,8 +110,8 @@ const Layout: React.FC = () => {
         sx={{
           background: 'linear-gradient(135deg, #1a237e 0%, #534bae 100%)',
           color: 'white',
-          minHeight: '64px !important',
-          px: 3,
+          minHeight: '52px !important',
+          px: 2,
         }}
       >
         <Typography
@@ -120,7 +120,7 @@ const Layout: React.FC = () => {
           component="div"
           sx={{
             fontWeight: 700,
-            fontSize: '1.25rem',
+            fontSize: '1.05rem',
             letterSpacing: '0.5px',
           }}
         >
@@ -128,9 +128,9 @@ const Layout: React.FC = () => {
         </Typography>
       </Toolbar>
       <Divider />
-      <List sx={{ flexGrow: 1, px: 1.5, py: 2 }}>
+      <List sx={{ flexGrow: 1, px: 1, py: 1.25 }}>
         {visibleMenuItems.map((item) => (
-          <ListItem key={item.text} disablePadding sx={{ mb: 0.5 }}>
+          <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
             <ListItemButton
               selected={location.pathname === item.path}
               onClick={() => {
@@ -139,15 +139,15 @@ const Layout: React.FC = () => {
               }}
               aria-label={`Go to ${item.text}`}
               sx={{
-                py: 1.25,
-                px: 2,
+                py: 0.75,
+                px: 1.5,
                 borderRadius: 2,
                 transition: 'all 0.2s ease-in-out',
               }}
             >
               <ListItemIcon
                 sx={{
-                  minWidth: 40,
+                  minWidth: 34,
                   color: location.pathname === item.path ? 'primary.main' : 'text.secondary',
                 }}
               >
@@ -156,7 +156,7 @@ const Layout: React.FC = () => {
               <ListItemText
                 primary={item.text}
                 primaryTypographyProps={{
-                  fontSize: '0.9375rem',
+                  fontSize: '0.85rem',
                   fontWeight: location.pathname === item.path ? 600 : 500,
                 }}
               />
@@ -179,14 +179,14 @@ const Layout: React.FC = () => {
           borderColor: 'divider',
         }}
       >
-        <Toolbar sx={{ px: { xs: 2, sm: 3 }, minHeight: '64px !important' }}>
+        <Toolbar sx={{ px: { xs: 1.5, sm: 2 }, minHeight: '52px !important' }}>
           <IconButton
             color="inherit"
             aria-label="Open navigation menu"
             edge="start"
             onClick={handleDrawerToggle}
             sx={{
-              mr: 2,
+              mr: 1,
               display: { sm: 'none' },
               color: 'text.primary',
             }}
@@ -200,7 +200,7 @@ const Layout: React.FC = () => {
             sx={{
               flexGrow: 1,
               fontWeight: 600,
-              fontSize: '1.125rem',
+              fontSize: '1rem',
               color: 'text.primary',
             }}
           >
@@ -222,11 +222,11 @@ const Layout: React.FC = () => {
           >
             <Avatar
               sx={{
-                width: 36,
-                height: 36,
+                width: 30,
+                height: 30,
                 bgcolor: 'primary.main',
                 fontWeight: 600,
-                fontSize: '0.875rem',
+                fontSize: '0.8125rem',
               }}
             >
               {username?.charAt(0).toUpperCase() || 'U'}
@@ -248,8 +248,8 @@ const Layout: React.FC = () => {
             <MenuItem
               onClick={handleLogout}
               sx={{
-                py: 1.5,
-                px: 2,
+                py: 0.75,
+                px: 1.5,
                 '&:hover': {
                   backgroundColor: 'action.hover',
                 },
@@ -296,13 +296,13 @@ const Layout: React.FC = () => {
         component="main"
         sx={{
           flexGrow: 1,
-          p: { xs: 2, sm: 3, md: 4 },
+          p: { xs: 1.5, sm: 2, md: 2.5 },
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           backgroundColor: 'background.default',
           minHeight: '100vh',
         }}
       >
-        <Toolbar />
+        <Toolbar sx={{ minHeight: '52px !important' }} />
         <Outlet />
       </Box>
     </Box>

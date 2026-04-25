@@ -31,6 +31,7 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   Settings as SettingsIcon,
+  Send as SendIcon,
 } from '@mui/icons-material';
 import api, { normalizeConnectionStatus } from '../api/client';
 
@@ -69,6 +70,42 @@ interface ModbusRegister {
   scaleFactor?: number;
   offset?: number;
   unit?: string;
+}
+
+function parseModbusWritePayload(register: ModbusRegister, raw: string): unknown {
+  const t = raw.trim();
+  if (register.functionCode === 1) {
+    if (register.quantity > 1) {
+      try {
+        const arr = JSON.parse(raw) as unknown;
+        if (!Array.isArray(arr)) {
+          throw new Error('Use a JSON array, e.g. [true,false,0,1]');
+        }
+        if (arr.length !== register.quantity) {
+          throw new Error(`Array must have exactly ${register.quantity} elements (one per coil).`);
+        }
+        return arr;
+      } catch (e: any) {
+        if (e?.message?.startsWith('Array') || e?.message?.startsWith('Use')) throw e;
+        throw new Error('Invalid JSON. Example for 4 coils: [true,false,1,0]');
+      }
+    }
+    const lower = t.toLowerCase();
+    if (lower === 'true' || t === '1') return true;
+    if (lower === 'false' || t === '0') return false;
+    throw new Error('Enter true, false, 1, or 0 for a single coil.');
+  }
+  if (register.functionCode === 3 && (register.dataType || '').toLowerCase() === 'bool') {
+    const lower = t.toLowerCase();
+    if (lower === 'true' || t === '1') return true;
+    if (lower === 'false' || t === '0') return false;
+    throw new Error('Enter true, false, 1, or 0.');
+  }
+  const n = Number(t);
+  if (!Number.isFinite(n)) {
+    throw new Error('Enter a valid number (engineering units if scale/offset are set).');
+  }
+  return n;
 }
 
 const ModbusDevices: React.FC = () => {
@@ -121,6 +158,11 @@ const ModbusDevices: React.FC = () => {
 
   const [serialPorts, setSerialPorts] = useState<{ path: string; manufacturer?: string }[]>([]);
   const [serialPortsLoading, setSerialPortsLoading] = useState(false);
+
+  const [writeTarget, setWriteTarget] = useState<ModbusRegister | null>(null);
+  const [writeValueText, setWriteValueText] = useState('');
+  const [writeBusy, setWriteBusy] = useState(false);
+  const [writeErr, setWriteErr] = useState('');
 
   useEffect(() => {
     loadDevices();
@@ -226,6 +268,38 @@ const ModbusDevices: React.FC = () => {
     setRegisters([]);
     setRegisterError('');
     resetRegisterForm();
+    setWriteTarget(null);
+    setWriteErr('');
+  };
+
+  const openWriteDialog = (register: ModbusRegister) => {
+    setWriteTarget(register);
+    setWriteErr('');
+    const isBool =
+      register.functionCode === 1 ||
+      (register.functionCode === 3 && (register.dataType || '').toLowerCase() === 'bool');
+    setWriteValueText(isBool ? 'false' : '0');
+  };
+
+  const closeWriteDialog = () => {
+    setWriteTarget(null);
+    setWriteErr('');
+    setWriteBusy(false);
+  };
+
+  const handleWriteSubmit = async () => {
+    if (!writeTarget || !selectedDevice || !api.modbus?.write) return;
+    setWriteBusy(true);
+    setWriteErr('');
+    try {
+      const value = parseModbusWritePayload(writeTarget, writeValueText);
+      await api.modbus.write({ deviceId: selectedDevice.id, registerId: writeTarget.id, value });
+      closeWriteDialog();
+    } catch (err: any) {
+      setWriteErr(err.message || String(err));
+    } finally {
+      setWriteBusy(false);
+    }
   };
 
   const handleRegisterFormOpen = (register?: ModbusRegister) => {
@@ -834,7 +908,9 @@ const ModbusDevices: React.FC = () => {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Registers define which Modbus addresses are polled for this device. If no registers are
             configured, the system will attempt to auto-discover a few defaults the first time you
-            start the device, but you can refine them here for precise data acquisition.
+            start the device, but you can refine them here for precise data acquisition. For coils
+            (FC1) and holding registers (FC3), you can write values when the device is connected (Send
+            icon). Multi-coil writes use a JSON array matching the register quantity.
           </Typography>
 
           {registerError && (
@@ -862,7 +938,12 @@ const ModbusDevices: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {registers.map((register) => (
+                  {registers.map((register) => {
+                    const canWrite =
+                      selectedDevice &&
+                      (register.functionCode === 1 || register.functionCode === 3) &&
+                      connectionStatus[selectedDevice.id];
+                    return (
                     <TableRow key={register.id}>
                       <TableCell>{register.name}</TableCell>
                       <TableCell>FC {register.functionCode}</TableCell>
@@ -871,6 +952,13 @@ const ModbusDevices: React.FC = () => {
                       <TableCell>{register.dataType}</TableCell>
                       <TableCell>{register.unit || '—'}</TableCell>
                       <TableCell align="right">
+                        {canWrite && (
+                          <Tooltip title="Write value to device">
+                            <IconButton size="small" onClick={() => openWriteDialog(register)}>
+                              <SendIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         <IconButton
                           size="small"
                           onClick={() => handleRegisterFormOpen(register)}
@@ -886,7 +974,8 @@ const ModbusDevices: React.FC = () => {
                         </IconButton>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  );
+                  })}
                   {registers.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={7} align="center">
@@ -1037,6 +1126,49 @@ const ModbusDevices: React.FC = () => {
           <Button onClick={handleRegisterFormClose}>Cancel</Button>
           <Button variant="contained" onClick={handleRegisterFormSubmit}>
             {registerEditing ? 'Save Changes' : 'Add Register'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!writeTarget} onClose={() => !writeBusy && closeWriteDialog()} maxWidth="sm" fullWidth>
+        <DialogTitle>Write Modbus register</DialogTitle>
+        <DialogContent>
+          {writeTarget && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+              <Typography variant="body2" color="text.secondary">
+                {writeTarget.name} — FC{writeTarget.functionCode}, address {writeTarget.address}, quantity{' '}
+                {writeTarget.quantity}, type {writeTarget.dataType}
+              </Typography>
+              {writeErr && (
+                <Alert severity="error" onClose={() => setWriteErr('')}>
+                  {writeErr}
+                </Alert>
+              )}
+              <TextField
+                label="Value"
+                value={writeValueText}
+                onChange={(e) => setWriteValueText(e.target.value)}
+                fullWidth
+                disabled={writeBusy}
+                multiline={writeTarget.functionCode === 1 && writeTarget.quantity > 1}
+                minRows={writeTarget.functionCode === 1 && writeTarget.quantity > 1 ? 2 : 1}
+                helperText={
+                  writeTarget.functionCode === 1 && writeTarget.quantity > 1
+                    ? `JSON array of ${writeTarget.quantity} booleans or 0/1, e.g. [true,false,1,0]`
+                    : writeTarget.functionCode === 1 || (writeTarget.dataType || '').toLowerCase() === 'bool'
+                      ? 'true / false / 1 / 0'
+                      : 'Numeric value (same engineering units as scale/offset on the register, if any)'
+                }
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeWriteDialog} disabled={writeBusy}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleWriteSubmit} disabled={writeBusy || !writeTarget}>
+            {writeBusy ? 'Writing…' : 'Write'}
           </Button>
         </DialogActions>
       </Dialog>

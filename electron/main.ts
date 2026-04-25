@@ -367,6 +367,11 @@ function setupIpcHandlers() {
     return modbusService.getConnectionStatus();
   });
 
+  ipcMain.handle('modbus:write', async (_, payload: { deviceId: string; registerId: string; value: unknown }) => {
+    await modbusService.writeMappedRegister(payload.deviceId, payload.registerId, payload.value);
+    return { ok: true };
+  });
+
   ipcMain.handle('modbus:listSerialPorts', async () => {
     const { SerialPort } = await import('serialport');
     const ports = await SerialPort.list();

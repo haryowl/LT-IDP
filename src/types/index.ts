@@ -32,6 +32,8 @@ export interface ElectronAPI {
     connect: (deviceId: string) => Promise<any>;
     disconnect: (deviceId: string) => Promise<any>;
     getStatus: () => Promise<any>;
+    write: (payload: { deviceId: string; registerId: string; value: unknown }) => Promise<{ ok: boolean }>;
+    listSerialPorts: () => Promise<{ path: string; manufacturer?: string; serialNumber?: string }[]>;
   };
   mqtt: {
     devices: {
