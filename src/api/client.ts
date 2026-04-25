@@ -206,6 +206,20 @@ export const api = {
     getStatus: () => (isElectron ? Promise.reject(new Error('GNSS status is only available in web mode')) : request('GET', '/gnss/status')),
   },
   system: { getClientId: () => (isElectron ? (window as any).electronAPI.system.getClientId() : request('GET', '/system/client-id')), setClientId: (id: string) => (isElectron ? (window as any).electronAPI.system.setClientId(id) : request('POST', '/system/client-id', { clientId: id })), getLocalIp: () => (isElectron ? (window as any).electronAPI.system.getLocalIp() : request('GET', '/system/local-ip')), getTimestampInterval: () => (isElectron ? (window as any).electronAPI.system.getTimestampInterval?.() : request('GET', '/system/timestamp-interval')), setTimestampInterval: (s: number) => (isElectron ? (window as any).electronAPI.system.setTimestampInterval?.(s) : request('POST', '/system/timestamp-interval', { seconds: s })), getLogDirectory: () => (isElectron ? (window as any).electronAPI.system.getLogDirectory?.() : request('GET', '/system/log-directory')), getCurrentLogFile: () => (isElectron ? (window as any).electronAPI.system.getCurrentLogFile?.() : request('GET', '/system/current-log-file')), getSystemInfo: () => (isElectron ? (window as any).electronAPI.system.getSystemInfo?.() : request('GET', '/system/info')) },
+  wifi: {
+    status: () => (isElectron ? Promise.reject(new Error('Wi‑Fi control is only available in web mode')) : request('GET', '/wifi/status')),
+    scan: (ifname?: string) =>
+      isElectron ? Promise.reject(new Error('Wi‑Fi control is only available in web mode')) : request('GET', `/wifi/scan${ifname ? `?ifname=${encodeURIComponent(ifname)}` : ''}`),
+    connect: (payload: { ssid: string; password?: string; ifname?: string }) =>
+      isElectron ? Promise.reject(new Error('Wi‑Fi control is only available in web mode')) : request('POST', '/wifi/connect', payload),
+    disconnect: (payload: { ifname: string }) =>
+      isElectron ? Promise.reject(new Error('Wi‑Fi control is only available in web mode')) : request('POST', '/wifi/disconnect', payload),
+  },
+  netIp: {
+    status: () => (isElectron ? Promise.reject(new Error('IP settings are only available in web mode')) : request('GET', '/net/ip/status')),
+    set: (payload: { device: string; method: 'auto' | 'manual'; address?: string; gateway?: string; dns?: string[] }) =>
+      isElectron ? Promise.reject(new Error('IP settings are only available in web mode')) : request('POST', '/net/ip/set', payload),
+  },
   systemSecurity: {
     getReadOnlyToken: () =>
       isElectron

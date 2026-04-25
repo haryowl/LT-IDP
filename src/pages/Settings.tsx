@@ -12,6 +12,7 @@ import {
   FormControlLabel,
   Grid,
   LinearProgress,
+  MenuItem,
   Paper,
   Stack,
   Switch,
@@ -21,6 +22,7 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import WiFiIcon from '@mui/icons-material/Wifi';
 import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined';
 import AccessTimeOutlinedIcon from '@mui/icons-material/AccessTimeOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
@@ -150,6 +152,24 @@ interface SystemInfo {
     wifi?: WifiAdapterRow[];
   };
 }
+
+type WifiScanRow = {
+  ssid: string;
+  security: string;
+  signal: number | null;
+  inUse: boolean;
+  device?: string | null;
+};
+
+type NetIpRow = {
+  device: string;
+  type: string;
+  state: string;
+  connection: string | null;
+  ipv4Address: string | null;
+  ipv4Gateway: string | null;
+  ipv4Dns: string[];
+};
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${Math.round(b)} B`;
@@ -847,6 +867,147 @@ const Settings: React.FC = () => {
     baudRate: 9600,
     historyIntervalSeconds: 5,
   });
+
+  // Wi‑Fi control (Linux / NetworkManager) — web mode only
+  const [wifiIfname, setWifiIfname] = useState<string>('');
+  const [wifiScan, setWifiScan] = useState<WifiScanRow[]>([]);
+  const [wifiScanLoading, setWifiScanLoading] = useState(false);
+  const [wifiSsid, setWifiSsid] = useState('');
+  const [wifiPassword, setWifiPassword] = useState('');
+  const [wifiBusy, setWifiBusy] = useState(false);
+  const [wifiStatus, setWifiStatus] = useState<{ devices: Array<{ device: string; state: string; connection: string | null }> } | null>(null);
+
+  const [netIpStatus, setNetIpStatus] = useState<{ devices: NetIpRow[] } | null>(null);
+  const [ipDevice, setIpDevice] = useState<string>('');
+  const [ipMethod, setIpMethod] = useState<'auto' | 'manual'>('auto');
+  const [ipAddress, setIpAddress] = useState<string>('');
+  const [ipGateway, setIpGateway] = useState<string>('');
+  const [ipDns, setIpDns] = useState<string>('');
+  const [ipTestConnectivity, setIpTestConnectivity] = useState<boolean>(true);
+  const [ipRollbackSeconds, setIpRollbackSeconds] = useState<number>(30);
+  const [ipBusy, setIpBusy] = useState<boolean>(false);
+
+  const wifiInterfaces = useMemo(() => {
+    const ifaces = systemInfo?.network?.interfaces ?? [];
+    return ifaces.filter((i) => i.portKind === 'wireless').map((i) => i.name);
+  }, [systemInfo?.network?.interfaces]);
+
+  const wiredInterfaces = useMemo(() => {
+    const ifaces = systemInfo?.network?.interfaces ?? [];
+    return ifaces.filter((i) => i.portKind === 'ethernet').map((i) => i.name);
+  }, [systemInfo?.network?.interfaces]);
+
+  const ipInterfaces = useMemo(() => [...wifiInterfaces, ...wiredInterfaces], [wifiInterfaces, wiredInterfaces]);
+
+  useEffect(() => {
+    if (!wifiIfname && wifiInterfaces.length > 0) setWifiIfname(wifiInterfaces[0]);
+  }, [wifiInterfaces, wifiIfname]);
+
+  useEffect(() => {
+    if (!ipDevice && ipInterfaces.length > 0) setIpDevice(ipInterfaces[0]);
+  }, [ipInterfaces, ipDevice]);
+
+  const loadWifiStatus = useCallback(async () => {
+    try {
+      const st = await (api as any).wifi?.status?.();
+      setWifiStatus(st || null);
+    } catch (_) {
+      setWifiStatus(null);
+    }
+  }, []);
+
+  const scanWifi = useCallback(async () => {
+    setWifiScanLoading(true);
+    try {
+      const res = await (api as any).wifi?.scan?.(wifiIfname || undefined);
+      setWifiScan(Array.isArray(res?.networks) ? res.networks : []);
+      await loadWifiStatus();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to scan Wi‑Fi networks');
+    } finally {
+      setWifiScanLoading(false);
+    }
+  }, [wifiIfname, loadWifiStatus]);
+
+  const loadNetIpStatus = useCallback(async () => {
+    try {
+      const st = await (api as any).netIp?.status?.();
+      setNetIpStatus(st || null);
+    } catch (_) {
+      setNetIpStatus(null);
+    }
+  }, []);
+
+  const hydrateIpFormFromStatus = useCallback(
+    (device: string, st: { devices: NetIpRow[] } | null) => {
+      const row = st?.devices?.find((d) => d.device === device);
+      if (!row) return;
+      setIpAddress(row.ipv4Address || '');
+      setIpGateway(row.ipv4Gateway || '');
+      setIpDns((row.ipv4Dns || []).join(', '));
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (ipDevice) hydrateIpFormFromStatus(ipDevice, netIpStatus);
+  }, [ipDevice, netIpStatus, hydrateIpFormFromStatus]);
+
+  const applyIpSettings = useCallback(async () => {
+    setIpBusy(true);
+    try {
+      if (!ipDevice) throw new Error('Select an interface');
+      const dnsList = ipDns
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const payload: any = {
+        device: ipDevice,
+        method: ipMethod,
+        testConnectivity: ipTestConnectivity,
+        safetyRollbackSeconds: ipRollbackSeconds,
+      };
+      if (ipMethod === 'manual') {
+        payload.address = ipAddress.trim();
+        payload.gateway = ipGateway.trim() || undefined;
+        payload.dns = dnsList;
+      }
+      const res = await (api as any).netIp?.set?.(payload);
+      if (res?.status) setNetIpStatus(res.status);
+      setSuccess('IP settings applied');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to apply IP settings');
+    } finally {
+      setIpBusy(false);
+    }
+  }, [ipDevice, ipMethod, ipAddress, ipGateway, ipDns, ipTestConnectivity, ipRollbackSeconds]);
+
+  const connectWifi = useCallback(async () => {
+    setWifiBusy(true);
+    try {
+      await (api as any).wifi?.connect?.({ ssid: wifiSsid.trim(), password: wifiPassword || undefined, ifname: wifiIfname || undefined });
+      setSuccess('Wi‑Fi connect request sent');
+      await scanWifi();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to connect Wi‑Fi');
+    } finally {
+      setWifiBusy(false);
+    }
+  }, [wifiSsid, wifiPassword, wifiIfname, scanWifi]);
+
+  const disconnectWifi = useCallback(async () => {
+    setWifiBusy(true);
+    try {
+      if (!wifiIfname) throw new Error('Select a Wi‑Fi interface first');
+      await (api as any).wifi?.disconnect?.({ ifname: wifiIfname });
+      setSuccess('Wi‑Fi disconnected');
+      await scanWifi();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to disconnect Wi‑Fi');
+    } finally {
+      setWifiBusy(false);
+    }
+  }, [wifiIfname, scanWifi]);
   const [gnssStatus, setGnssStatus] = useState<GnssStatus | null>(null);
   const [gnssLoading, setGnssLoading] = useState(false);
   const [gnssSaving, setGnssSaving] = useState(false);
@@ -1151,6 +1312,261 @@ const Settings: React.FC = () => {
         sysAutoRefresh={sysAutoRefresh}
         setSysAutoRefresh={setSysAutoRefresh}
       />
+
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.25} mb={1.25}>
+          <Stack direction="row" spacing={1.25} alignItems="center">
+            <Avatar sx={{ bgcolor: (t) => alpha(t.palette.primary.main, 0.12), color: 'primary.main' }}>
+              <WiFiIcon />
+            </Avatar>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                Wi‑Fi (Linux)
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Connect/disconnect using NetworkManager (<code>nmcli</code>)
+              </Typography>
+            </Box>
+          </Stack>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Button size="small" variant="outlined" onClick={loadWifiStatus} disabled={wifiScanLoading || wifiBusy}>
+              Refresh status
+            </Button>
+            <Button size="small" variant="outlined" onClick={loadNetIpStatus} disabled={wifiScanLoading || wifiBusy || ipBusy}>
+              Refresh IP
+            </Button>
+            <Button size="small" variant="outlined" onClick={scanWifi} disabled={wifiScanLoading || wifiBusy}>
+              {wifiScanLoading ? 'Scanning…' : 'Scan'}
+            </Button>
+          </Stack>
+        </Box>
+        <Divider sx={{ mb: 1.5 }} />
+
+        <Grid container spacing={1.5}>
+          <Grid item xs={12} md={5}>
+            <Stack spacing={1.25}>
+              <TextField
+                select
+                label="Wi‑Fi interface"
+                value={wifiIfname}
+                onChange={(e) => setWifiIfname(e.target.value)}
+                fullWidth
+                helperText={wifiInterfaces.length === 0 ? 'No wireless interfaces detected in System health' : undefined}
+              >
+                {wifiInterfaces.map((n) => (
+                  <MenuItem key={n} value={n}>
+                    {n}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="SSID"
+                value={wifiSsid}
+                onChange={(e) => setWifiSsid(e.target.value)}
+                fullWidth
+                placeholder="e.g. MyHotspot"
+              />
+              <TextField
+                label="Password (optional)"
+                value={wifiPassword}
+                onChange={(e) => setWifiPassword(e.target.value)}
+                type="password"
+                fullWidth
+                placeholder="Leave empty for open networks"
+              />
+
+              <Divider />
+              <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                IP settings (Wi‑Fi / LAN)
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Linux only. Be careful when setting static IP remotely.
+              </Typography>
+
+              <TextField select label="Interface" value={ipDevice} onChange={(e) => setIpDevice(e.target.value)} fullWidth>
+                {ipInterfaces.map((n) => (
+                  <MenuItem key={n} value={n}>
+                    {n}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                label="IPv4 method"
+                value={ipMethod}
+                onChange={(e) => setIpMethod(e.target.value as 'auto' | 'manual')}
+                fullWidth
+              >
+                <MenuItem value="auto">DHCP (auto)</MenuItem>
+                <MenuItem value="manual">Static (manual)</MenuItem>
+              </TextField>
+
+              <TextField
+                label="IPv4 address (CIDR)"
+                value={ipAddress}
+                onChange={(e) => setIpAddress(e.target.value)}
+                fullWidth
+                disabled={ipMethod !== 'manual'}
+                placeholder="e.g. 192.168.1.50/24"
+              />
+              <TextField
+                label="Gateway (optional)"
+                value={ipGateway}
+                onChange={(e) => setIpGateway(e.target.value)}
+                fullWidth
+                disabled={ipMethod !== 'manual'}
+                placeholder="e.g. 192.168.1.1"
+              />
+              <TextField
+                label="DNS (comma-separated)"
+                value={ipDns}
+                onChange={(e) => setIpDns(e.target.value)}
+                fullWidth
+                disabled={ipMethod !== 'manual'}
+                placeholder="e.g. 1.1.1.1, 8.8.8.8"
+              />
+
+              <Grid container spacing={1.5}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Rollback timer (sec)"
+                    type="number"
+                    value={ipRollbackSeconds}
+                    onChange={(e) => setIpRollbackSeconds(Number(e.target.value || 0))}
+                    fullWidth
+                    helperText="0 = no timer (rollback immediately on failed test)"
+                    inputProps={{ min: 0, max: 300, step: 5 }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <FormControlLabel
+                    control={<Switch checked={ipTestConnectivity} onChange={(e) => setIpTestConnectivity(e.target.checked)} />}
+                    label="Connectivity test (ping)"
+                  />
+                </Grid>
+              </Grid>
+
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Button variant="contained" onClick={applyIpSettings} disabled={ipBusy || !ipDevice} disableElevation>
+                  {ipBusy ? 'Applying…' : 'Apply IP'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => {
+                    setIpMethod('auto');
+                    setIpAddress('');
+                    setIpGateway('');
+                    setIpDns('');
+                    setIpTestConnectivity(true);
+                    setIpRollbackSeconds(30);
+                  }}
+                  disabled={ipBusy}
+                >
+                  Reset form
+                </Button>
+              </Stack>
+
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Button
+                  variant="contained"
+                  onClick={connectWifi}
+                  disabled={wifiBusy || wifiScanLoading || !wifiSsid.trim()}
+                  disableElevation
+                >
+                  {wifiBusy ? 'Working…' : 'Connect'}
+                </Button>
+                <Button variant="outlined" onClick={disconnectWifi} disabled={wifiBusy || wifiScanLoading || !wifiIfname}>
+                  Disconnect
+                </Button>
+              </Stack>
+
+              <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+                    Status
+                  </Typography>
+                  {wifiStatus?.devices?.length ? (
+                    <Stack spacing={0.5}>
+                      {wifiStatus.devices.map((d) => (
+                        <Typography key={d.device} variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem' }}>
+                          <Box component="span" color="text.secondary" sx={{ display: 'inline-block', minWidth: 64 }}>
+                            {d.device}
+                          </Box>
+                          {d.connection || '—'}{' '}
+                          <Box component="span" color="text.secondary">
+                            ({d.state})
+                          </Box>
+                        </Typography>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Not available. This requires Linux + NetworkManager (<code>nmcli</code>).
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Stack>
+          </Grid>
+
+          <Grid item xs={12} md={7}>
+            <Card variant="outlined" sx={{ borderRadius: 2 }}>
+              <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                    Scan results
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Click a row to fill SSID
+                  </Typography>
+                </Stack>
+                {wifiScan.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No scan data yet. Click <strong>Scan</strong>.
+                  </Typography>
+                ) : (
+                  <Stack spacing={0.5}>
+                    {wifiScan.slice(0, 30).map((n) => (
+                      <Paper
+                        key={`${n.ssid}:${n.device ?? ''}`}
+                        variant="outlined"
+                        sx={{
+                          p: 1,
+                          borderRadius: 2,
+                          cursor: 'pointer',
+                          bgcolor: n.inUse ? (t) => alpha(t.palette.success.main, 0.06) : 'transparent',
+                          borderColor: n.inUse ? (t) => alpha(t.palette.success.main, 0.25) : undefined,
+                        }}
+                        onClick={() => setWifiSsid(n.ssid)}
+                      >
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                              {n.ssid}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {n.security || 'open'}{n.device ? ` · ${n.device}` : ''}
+                            </Typography>
+                          </Box>
+                          <Chip
+                            size="small"
+                            label={n.inUse ? 'In use' : `${n.signal ?? '—'}%`}
+                            color={n.inUse ? 'success' : 'default'}
+                            variant={n.inUse ? 'filled' : 'outlined'}
+                            sx={{ fontWeight: 600, flexShrink: 0 }}
+                          />
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </Paper>
 
       <Paper sx={{ p: 2, mb: 2 }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.25} mb={1.25}>

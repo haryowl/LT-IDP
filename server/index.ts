@@ -24,9 +24,293 @@ import { getLogger } from '../electron/services/logger';
 import { getSystemInfo } from '../electron/services/systemInfo';
 import { GnssService, type GnssConfig } from '../electron/services/gnssService';
 import { SerialPort } from 'serialport';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+
+const execFileAsync = promisify(execFile);
+
+function isLinux(): boolean {
+  return process.platform === 'linux';
+}
+
+function assertLinuxWifiSupported(): void {
+  if (!isLinux()) {
+    throw new Error('Wi‑Fi configuration is supported only on Linux hosts.');
+  }
+}
+
+async function nmcli(args: string[], timeoutMs = 12_000): Promise<string> {
+  const { stdout } = await execFileAsync('nmcli', args, {
+    timeout: timeoutMs,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+    encoding: 'utf8',
+  } as any);
+  return String(stdout || '');
+}
+
+type WifiScanRow = {
+  ssid: string;
+  security: string;
+  signal: number | null;
+  inUse: boolean;
+  device?: string | null;
+};
+
+function parseNmcliWifiList(stdout: string): WifiScanRow[] {
+  // format: IN-USE:SSID:SECURITY:SIGNAL:DEVICE
+  const lines = String(stdout || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const out: WifiScanRow[] = [];
+  for (const line of lines) {
+    const parts = line.split(':');
+    const inUse = (parts[0] || '').trim() === '*';
+    const ssid = (parts[1] || '').trim();
+    const security = (parts[2] || '').trim();
+    const signalRaw = (parts[3] || '').trim();
+    const device = (parts[4] || '').trim() || null;
+    const signal = signalRaw ? Number(signalRaw) : null;
+    if (!ssid) continue; // hide hidden SSIDs for now
+    out.push({ ssid, security, signal: Number.isFinite(signal as number) ? (signal as number) : null, inUse, device });
+  }
+  // strongest first; keep in-use on top
+  return out.sort(
+    (a, b) =>
+      (b.inUse ? 1 : 0) - (a.inUse ? 1 : 0) ||
+      (b.signal ?? -1) - (a.signal ?? -1) ||
+      a.ssid.localeCompare(b.ssid)
+  );
+}
+
+async function linuxWifiStatus(): Promise<{ devices: Array<{ device: string; type: string; state: string; connection: string | null }> }> {
+  assertLinuxWifiSupported();
+  const raw = await nmcli(['-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device']);
+  const lines = raw
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const devices = lines
+    .map((l) => {
+      const [device, type, state, connection] = l.split(':');
+      return { device, type, state, connection: connection && connection !== '--' ? connection : null };
+    })
+    .filter((d) => d.type === 'wifi');
+  return { devices };
+}
+
+type NetIpDeviceRow = {
+  device: string;
+  type: string;
+  state: string;
+  connection: string | null;
+  ipv4Address: string | null;
+  ipv4Gateway: string | null;
+  ipv4Dns: string[];
+};
+
+async function nmcliDeviceField(device: string, field: string): Promise<string> {
+  // e.g. nmcli -g GENERAL.CONNECTION device show wlan0
+  const out = await nmcli(['-g', field, 'device', 'show', device]);
+  return out.trim();
+}
+
+function splitDns(v: string): string[] {
+  const t = (v || '').trim();
+  if (!t) return [];
+  // nmcli -g IP4.DNS can return multi-line or comma-separated depending on version
+  return t
+    .replace(/\r\n/g, '\n')
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function linuxNetIpStatus(): Promise<{ devices: NetIpDeviceRow[] }> {
+  assertLinuxWifiSupported();
+  const raw = await nmcli(['-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device']);
+  const lines = raw
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const base = lines.map((l) => {
+    const [device, type, state, connection] = l.split(':');
+    return { device, type, state, connection: connection && connection !== '--' ? connection : null };
+  });
+  const wanted = base.filter((d) => d.type === 'wifi' || d.type === 'ethernet');
+
+  const devices: NetIpDeviceRow[] = [];
+  for (const d of wanted) {
+    // IP4.ADDRESS is often like "192.168.1.50/24" (may be multiple lines)
+    const addrRaw = await nmcliDeviceField(d.device, 'IP4.ADDRESS').catch(() => '');
+    const gwRaw = await nmcliDeviceField(d.device, 'IP4.GATEWAY').catch(() => '');
+    const dnsRaw = await nmcliDeviceField(d.device, 'IP4.DNS').catch(() => '');
+    const ipv4Address = addrRaw ? addrRaw.split(/\r?\n/)[0]?.trim() || null : null;
+    const ipv4Gateway = gwRaw || null;
+    const ipv4Dns = splitDns(dnsRaw);
+    devices.push({ ...d, ipv4Address, ipv4Gateway, ipv4Dns });
+  }
+  return { devices };
+}
+
+async function pingHost(host: string, timeoutMs = 3000): Promise<boolean> {
+  const h = String(host || '').trim();
+  if (!h) return false;
+  try {
+    // Linux: ping -c 1 -W <seconds> host
+    const waitSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+    await execFileAsync('ping', ['-c', '1', '-W', String(waitSeconds), h], {
+      timeout: timeoutMs + 1500,
+      maxBuffer: 128 * 1024,
+      windowsHide: true,
+      encoding: 'utf8',
+    } as any);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clampInt(n: any, min: number, max: number): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return min;
+  return Math.max(min, Math.min(max, Math.floor(v)));
+}
+
+function validateCidrv4(s: string): void {
+  const t = String(s || '').trim();
+  const m = t.match(/^(\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/);
+  if (!m) throw new Error('address must be IPv4 CIDR, e.g. 192.168.1.50/24');
+  const [ip, prefixStr] = t.split('/');
+  const parts = ip.split('.').map((x) => Number(x));
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    throw new Error('address must be IPv4 CIDR, e.g. 192.168.1.50/24');
+  }
+  const prefix = Number(prefixStr);
+  if (!Number.isInteger(prefix) || prefix < 1 || prefix > 32) throw new Error('CIDR prefix must be 1..32');
+}
+
+function validateIpv4(s: string, label: string): void {
+  const t = String(s || '').trim();
+  if (!t) return;
+  const parts = t.split('.').map((x) => Number(x));
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    throw new Error(`${label} must be an IPv4 address`);
+  }
+}
+
+async function linuxSetIpv4ForDevice(payload: {
+  device: string;
+  method: 'auto' | 'manual';
+  address?: string;
+  gateway?: string;
+  dns?: string[];
+  testConnectivity?: boolean;
+  safetyRollbackSeconds?: number;
+}): Promise<void> {
+  assertLinuxWifiSupported();
+  const device = String(payload.device || '').trim();
+  if (!device) throw new Error('device is required');
+  const conn = await nmcliDeviceField(device, 'GENERAL.CONNECTION').catch(() => '');
+  if (!conn || conn === '--') {
+    throw new Error(`No active NetworkManager connection for ${device}. Connect it first.`);
+  }
+
+  const method = payload.method;
+  if (method !== 'auto' && method !== 'manual') throw new Error('method must be auto or manual');
+
+  const testConnectivity = payload.testConnectivity !== false;
+  const safetyRollbackSeconds = clampInt(payload.safetyRollbackSeconds ?? 30, 0, 300);
+
+  const prev = {
+    method: (await nmcli(['-g', 'ipv4.method', 'connection', 'show', conn]).catch(() => '')).trim(),
+    addresses: (await nmcli(['-g', 'ipv4.addresses', 'connection', 'show', conn]).catch(() => '')).trim(),
+    gateway: (await nmcli(['-g', 'ipv4.gateway', 'connection', 'show', conn]).catch(() => '')).trim(),
+    dns: (await nmcli(['-g', 'ipv4.dns', 'connection', 'show', conn]).catch(() => '')).trim(),
+    ignoreAutoDns: (await nmcli(['-g', 'ipv4.ignore-auto-dns', 'connection', 'show', conn]).catch(() => '')).trim(),
+  };
+
+  if (method === 'auto') {
+    await nmcli(['connection', 'modify', conn, 'ipv4.method', 'auto']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.addresses', '']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.gateway', '']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.dns', '']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.ignore-auto-dns', 'no']);
+  } else {
+    const address = String(payload.address || '').trim();
+    if (!address) throw new Error('address is required for manual mode (example: 192.168.1.50/24)');
+    const gateway = String(payload.gateway || '').trim();
+    const dns = Array.isArray(payload.dns) ? payload.dns.map((d) => String(d).trim()).filter(Boolean) : [];
+    validateCidrv4(address);
+    validateIpv4(gateway, 'gateway');
+    dns.forEach((d) => validateIpv4(d, 'dns'));
+
+    await nmcli(['connection', 'modify', conn, 'ipv4.method', 'manual']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.addresses', address]);
+    await nmcli(['connection', 'modify', conn, 'ipv4.gateway', gateway || '']);
+    await nmcli(['connection', 'modify', conn, 'ipv4.dns', dns.join(',')]);
+    // Prefer explicit DNS when user provided any
+    await nmcli(['connection', 'modify', conn, 'ipv4.ignore-auto-dns', dns.length > 0 ? 'yes' : 'no']);
+  }
+
+  // Apply by cycling connection. (nmcli device reapply would be nicer but not always available.)
+  await nmcli(['connection', 'down', conn], 25_000).catch(() => {});
+  await nmcli(['connection', 'up', conn], 35_000);
+
+  const doVerify = async (): Promise<boolean> => {
+    if (!testConnectivity) return true;
+    // Prefer gateway ping if provided; otherwise just try public IP.
+    const gw = String(payload.gateway || '').trim();
+    if (gw) {
+      const okGw = await pingHost(gw, 3000);
+      if (!okGw) return false;
+    }
+    const okNet = await pingHost('1.1.1.1', 3500);
+    return okNet;
+  };
+
+  const restorePrev = async (): Promise<void> => {
+    await nmcli(['connection', 'modify', conn, 'ipv4.method', prev.method || 'auto']).catch(() => {});
+    await nmcli(['connection', 'modify', conn, 'ipv4.addresses', prev.addresses || '']).catch(() => {});
+    await nmcli(['connection', 'modify', conn, 'ipv4.gateway', prev.gateway || '']).catch(() => {});
+    await nmcli(['connection', 'modify', conn, 'ipv4.dns', prev.dns || '']).catch(() => {});
+    await nmcli(['connection', 'modify', conn, 'ipv4.ignore-auto-dns', prev.ignoreAutoDns || 'no']).catch(() => {});
+    await nmcli(['connection', 'down', conn], 25_000).catch(() => {});
+    await nmcli(['connection', 'up', conn], 35_000).catch(() => {});
+  };
+
+  if (safetyRollbackSeconds > 0) {
+    let rolledBack = false;
+    const timer = setTimeout(async () => {
+      if (rolledBack) return;
+      // If still not good after the grace period, rollback.
+      const ok = await doVerify().catch(() => false);
+      if (!ok) {
+        rolledBack = true;
+        await restorePrev().catch(() => {});
+      }
+    }, safetyRollbackSeconds * 1000);
+
+    // Early verify: if good now, cancel timer.
+    const okNow = await doVerify().catch(() => false);
+    if (okNow) {
+      clearTimeout(timer);
+    }
+  } else {
+    const okNow = await doVerify().catch(() => false);
+    if (!okNow) {
+      await restorePrev();
+      throw new Error('Connectivity test failed; changes were rolled back.');
+    }
+  }
+}
 
 // Ensure data dir exists
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -551,6 +835,101 @@ app.post('/api/system/read-only-token/regenerate', authMiddleware, (req, res) =>
   const user = (req as any).user;
   if (user?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   res.json({ token: dbService.regenerateReadOnlyToken() });
+});
+
+// ---------- Wi‑Fi (Linux / NetworkManager) ----------
+app.get('/api/wifi/status', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    const st = await linuxWifiStatus();
+    res.json(st);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.get('/api/wifi/scan', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    assertLinuxWifiSupported();
+    const ifname = typeof (req.query as any)?.ifname === 'string' ? String((req.query as any).ifname).trim() : '';
+    const args = ['-t', '-f', 'IN-USE,SSID,SECURITY,SIGNAL,DEVICE', 'dev', 'wifi', 'list'];
+    if (ifname) args.push('ifname', ifname);
+    const stdout = await nmcli(args, 15_000);
+    res.json({ networks: parseNmcliWifiList(stdout) });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/wifi/connect', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    assertLinuxWifiSupported();
+    const { ssid, password, ifname } = req.body || {};
+    const s = String(ssid || '').trim();
+    const p = password == null ? '' : String(password);
+    const i = ifname == null ? '' : String(ifname).trim();
+    if (!s) return res.status(400).json({ error: 'ssid is required' });
+
+    const args = ['dev', 'wifi', 'connect', s];
+    if (p) args.push('password', p);
+    if (i) args.push('ifname', i);
+    await nmcli(args, 25_000);
+    res.json({ ok: true, status: await linuxWifiStatus() });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/wifi/disconnect', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    assertLinuxWifiSupported();
+    const { ifname } = req.body || {};
+    const i = String(ifname || '').trim();
+    if (!i) return res.status(400).json({ error: 'ifname is required' });
+    await nmcli(['dev', 'disconnect', i], 15_000);
+    res.json({ ok: true, status: await linuxWifiStatus() });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+// ---------- IP settings (Linux / NetworkManager) ----------
+app.get('/api/net/ip/status', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    const st = await linuxNetIpStatus();
+    res.json(st);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/net/ip/set', authMiddleware, async (req, res) => {
+  try {
+    const role = (req as any).user?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    const { device, method, address, gateway, dns, testConnectivity, safetyRollbackSeconds } = req.body || {};
+    await linuxSetIpv4ForDevice({
+      device,
+      method,
+      address,
+      gateway,
+      dns: Array.isArray(dns) ? dns : typeof dns === 'string' ? dns.split(',') : [],
+      testConnectivity: testConnectivity !== false,
+      safetyRollbackSeconds,
+    });
+    res.json({ ok: true, status: await linuxNetIpStatus() });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
 });
 
 // ---------- SPARING ----------
