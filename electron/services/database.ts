@@ -12,6 +12,8 @@ import type {
   ParameterMapping,
   Publisher,
   ThresholdPublishRule,
+  AdvancedRule,
+  AdvancedRuleEvent,
   MqttBrokerConfig,
   HistoricalData,
   BufferItem,
@@ -487,6 +489,39 @@ export class DatabaseService {
         last_triggered_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // Advanced rules (expression based) + event log
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS advanced_rules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        expression TEXT NOT NULL,
+        inputs TEXT NOT NULL,
+        snapshot_mapping_ids TEXT NOT NULL,
+        actions TEXT NOT NULL,
+        cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+        re_trigger_mode TEXT,
+        re_trigger_interval_seconds INTEGER,
+        timer_interval_seconds INTEGER,
+        last_triggered_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS advanced_rule_events (
+        id TEXT PRIMARY KEY,
+        rule_id TEXT NOT NULL,
+        rule_name TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK(severity IN ('info','warning','error')),
+        message TEXT NOT NULL,
+        triggered_at INTEGER NOT NULL,
+        payload TEXT,
+        created_at INTEGER NOT NULL
       )
     `);
 
@@ -1356,6 +1391,207 @@ export class DatabaseService {
 
   deleteThresholdPublishRule(id: string): void {
     this.db.prepare('DELETE FROM threshold_publish_rules WHERE id = ?').run(id);
+  }
+
+  // Advanced rule operations
+  getAdvancedRules(): AdvancedRule[] {
+    const rows = this.db.prepare('SELECT * FROM advanced_rules ORDER BY created_at DESC').all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      enabled: Boolean(r.enabled),
+      expression: r.expression,
+      inputs: JSON.parse(r.inputs || '[]'),
+      snapshotMappingIds: JSON.parse(r.snapshot_mapping_ids || '[]'),
+      actions: JSON.parse(r.actions || '{}'),
+      cooldownSeconds: r.cooldown_seconds || 0,
+      reTriggerMode: r.re_trigger_mode || undefined,
+      reTriggerIntervalSeconds: r.re_trigger_interval_seconds || undefined,
+      timerIntervalSeconds: r.timer_interval_seconds || undefined,
+      lastTriggeredAt: r.last_triggered_at ?? undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })) as AdvancedRule[];
+  }
+
+  getAdvancedRuleById(id: string): AdvancedRule | undefined {
+    const r = this.db.prepare('SELECT * FROM advanced_rules WHERE id = ?').get(id) as any;
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      name: r.name,
+      enabled: Boolean(r.enabled),
+      expression: r.expression,
+      inputs: JSON.parse(r.inputs || '[]'),
+      snapshotMappingIds: JSON.parse(r.snapshot_mapping_ids || '[]'),
+      actions: JSON.parse(r.actions || '{}'),
+      cooldownSeconds: r.cooldown_seconds || 0,
+      reTriggerMode: r.re_trigger_mode || undefined,
+      reTriggerIntervalSeconds: r.re_trigger_interval_seconds || undefined,
+      timerIntervalSeconds: r.timer_interval_seconds || undefined,
+      lastTriggeredAt: r.last_triggered_at ?? undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    } as AdvancedRule;
+  }
+
+  createAdvancedRule(rule: Partial<AdvancedRule>): AdvancedRule {
+    const id = uuidv4();
+    const now = Date.now();
+    const enabled = rule.enabled !== false ? 1 : 0;
+    const inputs = JSON.stringify(rule.inputs || []);
+    const snapshot = JSON.stringify(rule.snapshotMappingIds || []);
+    const actions = JSON.stringify(rule.actions || {});
+    const cooldown = Math.max(0, Math.floor(rule.cooldownSeconds || 0));
+    const reMode = rule.reTriggerMode ?? null;
+    const reInt = rule.reTriggerIntervalSeconds ?? null;
+    const timer = rule.timerIntervalSeconds ?? null;
+    const last = rule.lastTriggeredAt ?? null;
+
+    this.db
+      .prepare(
+        `INSERT INTO advanced_rules (
+          id, name, enabled, expression, inputs, snapshot_mapping_ids, actions,
+          cooldown_seconds, re_trigger_mode, re_trigger_interval_seconds, timer_interval_seconds,
+          last_triggered_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        rule.name || 'Advanced rule',
+        enabled,
+        rule.expression || 'false',
+        inputs,
+        snapshot,
+        actions,
+        cooldown,
+        reMode,
+        reInt,
+        timer,
+        last,
+        now,
+        now
+      );
+
+    return (this.getAdvancedRuleById(id) as AdvancedRule) ?? {
+      id,
+      name: rule.name || 'Advanced rule',
+      enabled: enabled === 1,
+      expression: rule.expression || 'false',
+      inputs: rule.inputs || [],
+      snapshotMappingIds: rule.snapshotMappingIds || [],
+      actions: rule.actions || {},
+      cooldownSeconds: cooldown,
+      reTriggerMode: rule.reTriggerMode,
+      reTriggerIntervalSeconds: rule.reTriggerIntervalSeconds,
+      timerIntervalSeconds: rule.timerIntervalSeconds,
+      lastTriggeredAt: rule.lastTriggeredAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  updateAdvancedRule(id: string, rule: Partial<AdvancedRule>): void {
+    const updates: string[] = [];
+    const values: any[] = [];
+    Object.entries(rule).forEach(([k, v]) => {
+      if (v === undefined) return;
+      switch (k) {
+        case 'name':
+          updates.push('name = ?');
+          values.push(v);
+          break;
+        case 'enabled':
+          updates.push('enabled = ?');
+          values.push(v ? 1 : 0);
+          break;
+        case 'expression':
+          updates.push('expression = ?');
+          values.push(v);
+          break;
+        case 'inputs':
+          updates.push('inputs = ?');
+          values.push(JSON.stringify(v || []));
+          break;
+        case 'snapshotMappingIds':
+          updates.push('snapshot_mapping_ids = ?');
+          values.push(JSON.stringify(v || []));
+          break;
+        case 'actions':
+          updates.push('actions = ?');
+          values.push(JSON.stringify(v || {}));
+          break;
+        case 'cooldownSeconds':
+          updates.push('cooldown_seconds = ?');
+          values.push(Math.max(0, Math.floor(Number(v) || 0)));
+          break;
+        case 'reTriggerMode':
+          updates.push('re_trigger_mode = ?');
+          values.push(v || null);
+          break;
+        case 'reTriggerIntervalSeconds':
+          updates.push('re_trigger_interval_seconds = ?');
+          values.push(v ?? null);
+          break;
+        case 'timerIntervalSeconds':
+          updates.push('timer_interval_seconds = ?');
+          values.push(v ?? null);
+          break;
+        case 'lastTriggeredAt':
+          updates.push('last_triggered_at = ?');
+          values.push(v ?? null);
+          break;
+        default:
+          break;
+      }
+    });
+    if (!updates.length) return;
+    updates.push('updated_at = ?');
+    values.push(Date.now());
+    values.push(id);
+    this.db.prepare(`UPDATE advanced_rules SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  deleteAdvancedRule(id: string): void {
+    this.db.prepare('DELETE FROM advanced_rules WHERE id = ?').run(id);
+  }
+
+  insertAdvancedRuleEvent(e: Omit<AdvancedRuleEvent, 'id'>): AdvancedRuleEvent {
+    const id = uuidv4();
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO advanced_rule_events (
+          id, rule_id, rule_name, severity, message, triggered_at, payload, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        e.ruleId,
+        e.ruleName,
+        e.severity,
+        e.message,
+        e.triggeredAt,
+        e.payload != null ? JSON.stringify(e.payload) : null,
+        now
+      );
+    return { id, ...e };
+  }
+
+  getAdvancedRuleEvents(limit = 200): AdvancedRuleEvent[] {
+    const safe = Math.max(1, Math.min(1000, Math.floor(limit || 200)));
+    const rows = this.db
+      .prepare('SELECT * FROM advanced_rule_events ORDER BY triggered_at DESC LIMIT ?')
+      .all(safe) as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      ruleId: r.rule_id,
+      ruleName: r.rule_name,
+      severity: r.severity,
+      message: r.message,
+      triggeredAt: r.triggered_at,
+      payload: r.payload ? JSON.parse(r.payload) : null,
+    })) as AdvancedRuleEvent[];
   }
 
   // Historical Data operations

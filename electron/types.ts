@@ -204,6 +204,53 @@ export interface ThresholdPublishRule {
   updatedAt: number;
 }
 
+export interface AdvancedRuleActionPublish {
+  /** Publisher IDs (mqtt/http) to emit this event to */
+  publisherIds: string[];
+}
+
+export interface AdvancedRuleActionAlert {
+  /** Severity to display/store */
+  severity: 'info' | 'warning' | 'error';
+}
+
+export interface AdvancedRuleActions {
+  alert?: AdvancedRuleActionAlert;
+  publish?: AdvancedRuleActionPublish;
+}
+
+export interface AdvancedRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Expression evaluated against latest values; should return boolean/truthy to trigger. */
+  expression: string;
+  /** Mapping IDs used by the expression (for event-driven evaluation). */
+  inputs: string[];
+  /** Additional mapping values to include in event payload. */
+  snapshotMappingIds: string[];
+  /** Cooldown between triggers. */
+  cooldownSeconds?: number;
+  reTriggerMode?: 'edge_only' | 'periodic_while_true';
+  reTriggerIntervalSeconds?: number;
+  /** Optional timer-based evaluation interval. */
+  timerIntervalSeconds?: number;
+  actions: AdvancedRuleActions;
+  lastTriggeredAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AdvancedRuleEvent {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  triggeredAt: number;
+  payload: any;
+}
+
 export interface RealtimeData {
   mappingId: string;
   mappingName: string;

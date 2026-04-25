@@ -54,6 +54,7 @@ const menuItems: MenuItem[] = [
   { text: 'Parameter Mappings', icon: <HubIcon />, path: '/mappings' },
   { text: 'Publishers', icon: <PublishIcon />, path: '/publishers' },
   { text: 'Threshold Rules', icon: <NotificationsActiveIcon />, path: '/threshold-rules' },
+  { text: 'Advanced Rules', icon: <NotificationsActiveIcon />, path: '/advanced-rules' },
   { text: 'Monitoring', icon: <MonitorIcon />, path: '/monitoring' },
   { text: 'Historical Data', icon: <HistoryIcon />, path: '/historical' },
   { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', roles: ['admin', 'guest'] },

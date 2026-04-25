@@ -70,6 +70,14 @@ interface GnssConfig {
   portPath: string | null;
   baudRate: number;
   historyIntervalSeconds?: number;
+  filterEnabled?: boolean;
+  minSatellites?: number;
+  minFixQuality?: number;
+  maxJumpMeters?: number;
+  maxSpeedKmh?: number;
+  holdLastGoodSeconds?: number;
+  smoothingWindow?: number;
+  minUpdateIntervalMs?: number;
 }
 
 interface GnssStatus {
@@ -79,7 +87,18 @@ interface GnssStatus {
   error: string | null;
   lastConnectAt: number | null;
   lastDisconnectAt: number | null;
-  fix: {
+  rawFix?: {
+    valid: boolean;
+    latitude: number | null;
+    longitude: number | null;
+    altitudeM: number | null;
+    speedKmh: number | null;
+    satellites: number | null;
+    fixQuality: number | null;
+    lastSentenceAt: number | null;
+    lastSentenceType: string | null;
+  };
+  filteredFix?: {
     valid: boolean;
     latitude: number | null;
     longitude: number | null;
@@ -1035,7 +1054,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  const fix = gnssStatus?.fix;
+  const fix = gnssStatus?.filteredFix ?? gnssStatus?.rawFix;
   const hasCoords = !!(fix && typeof fix.latitude === 'number' && typeof fix.longitude === 'number');
   const lat = hasCoords ? (fix!.latitude as number) : null;
   const lon = hasCoords ? (fix!.longitude as number) : null;
@@ -1183,6 +1202,89 @@ const Settings: React.FC = () => {
                 helperText="How often GNSS mappings are written to historical data (realtime updates can be faster)"
               />
 
+              <Divider />
+              <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                Accuracy filters
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={gnssConfig.filterEnabled !== false}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, filterEnabled: e.target.checked }))}
+                  />
+                }
+                label="Enable GNSS filtering"
+              />
+              <Grid container spacing={2}>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Min satellites"
+                    type="number"
+                    value={gnssConfig.minSatellites ?? 4}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, minSatellites: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 64, step: 1 }}
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Min fix quality"
+                    type="number"
+                    value={gnssConfig.minFixQuality ?? 1}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, minFixQuality: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 10, step: 1 }}
+                    helperText="GGA quality (1=GPS, 2=DGPS)"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Max jump (meters)"
+                    type="number"
+                    value={gnssConfig.maxJumpMeters ?? 25}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, maxJumpMeters: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 10000, step: 1 }}
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Max speed (km/h)"
+                    type="number"
+                    value={gnssConfig.maxSpeedKmh ?? 200}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, maxSpeedKmh: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 1000, step: 1 }}
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Hold last good (sec)"
+                    type="number"
+                    value={gnssConfig.holdLastGoodSeconds ?? 10}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, holdLastGoodSeconds: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 3600, step: 1 }}
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Smoothing window"
+                    type="number"
+                    value={gnssConfig.smoothingWindow ?? 1}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, smoothingWindow: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 1, max: 25, step: 1 }}
+                    helperText="1 = off"
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    label="Min update interval (ms)"
+                    type="number"
+                    value={gnssConfig.minUpdateIntervalMs ?? 200}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, minUpdateIntervalMs: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 30000, step: 50 }}
+                    helperText="Optional throttle for accepting fixes"
+                    fullWidth
+                  />
+                </Grid>
+              </Grid>
+
               <Box>
                 <Button variant="contained" onClick={saveGnssConfig} disabled={gnssSaving || gnssLoading} disableElevation>
                   {gnssSaving ? 'Saving…' : 'Save GNSS settings'}
@@ -1215,6 +1317,12 @@ const Settings: React.FC = () => {
                       <Typography variant="body2" color="text.secondary">
                         Lat: <strong>{fmtCoord(fix?.latitude ?? null)}</strong> · Lon: <strong>{fmtCoord(fix?.longitude ?? null)}</strong>
                       </Typography>
+                      {gnssStatus.rawFix && gnssStatus.filteredFix && (
+                        <Typography variant="caption" color="text.secondary">
+                          Raw: {fmtCoord(gnssStatus.rawFix.latitude ?? null)} / {fmtCoord(gnssStatus.rawFix.longitude ?? null)}{' '}
+                          · Filtered: {fmtCoord(gnssStatus.filteredFix.latitude ?? null)} / {fmtCoord(gnssStatus.filteredFix.longitude ?? null)}
+                        </Typography>
+                      )}
                       <Typography variant="caption" color="text.secondary">
                         Alt: {fix?.altitudeM != null ? `${fix.altitudeM.toFixed(1)} m` : '—'} · Speed:{' '}
                         {fix?.speedKmh != null ? `${fix.speedKmh.toFixed(1)} km/h` : '—'} · Fix quality:{' '}

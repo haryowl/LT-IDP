@@ -8,6 +8,14 @@ export type GnssConfig = {
   baudRate: number;
   /** Used only to throttle history storage for system-gnss-* mappings */
   historyIntervalSeconds?: number;
+  filterEnabled?: boolean;
+  minSatellites?: number;
+  minFixQuality?: number;
+  maxJumpMeters?: number;
+  maxSpeedKmh?: number;
+  holdLastGoodSeconds?: number;
+  smoothingWindow?: number;
+  minUpdateIntervalMs?: number;
 };
 
 export type GnssFix = {
@@ -29,11 +37,33 @@ export type GnssStatus = {
   error: string | null;
   lastConnectAt: number | null;
   lastDisconnectAt: number | null;
-  fix: GnssFix;
+  rawFix: GnssFix;
+  filteredFix: GnssFix;
 };
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+function isFiniteNum(v: any): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function median(nums: number[]): number {
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid]! : (a[mid - 1]! + a[mid]!) / 2;
 }
 
 function safePortPath(p: string | null): string | null {
@@ -117,15 +147,41 @@ export class GnssService extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private buffer = '';
+  private lastAcceptedAt: number | null = null;
+  private lastGoodAt: number | null = null;
+  private smoothWindow: Array<{ lat: number; lon: number }> = [];
 
   private status: GnssStatus = {
-    config: { enabled: false, portPath: null, baudRate: 9600 },
+    config: {
+      enabled: false,
+      portPath: null,
+      baudRate: 9600,
+      filterEnabled: true,
+      minSatellites: 4,
+      minFixQuality: 1,
+      maxJumpMeters: 25,
+      maxSpeedKmh: 200,
+      holdLastGoodSeconds: 10,
+      smoothingWindow: 1,
+      minUpdateIntervalMs: 200,
+    },
     connected: false,
     connecting: false,
     error: null,
     lastConnectAt: null,
     lastDisconnectAt: null,
-    fix: {
+    rawFix: {
+      valid: false,
+      latitude: null,
+      longitude: null,
+      altitudeM: null,
+      speedKmh: null,
+      satellites: null,
+      fixQuality: null,
+      lastSentenceAt: null,
+      lastSentenceType: null,
+    },
+    filteredFix: {
       valid: false,
       latitude: null,
       longitude: null,
@@ -147,7 +203,11 @@ export class GnssService extends EventEmitter {
   }
 
   getLatestFix(): GnssFix {
-    return this.status.fix;
+    return this.status.filteredFix;
+  }
+
+  getRawFix(): GnssFix {
+    return this.status.rawFix;
   }
 
   async applyConfig(next: Partial<GnssConfig>): Promise<GnssStatus> {
@@ -158,16 +218,39 @@ export class GnssService extends EventEmitter {
         typeof next.baudRate === 'number' && Number.isFinite(next.baudRate)
           ? Math.floor(next.baudRate)
           : this.status.config.baudRate,
+      historyIntervalSeconds:
+        typeof next.historyIntervalSeconds === 'number' && Number.isFinite(next.historyIntervalSeconds)
+          ? Math.max(1, Math.floor(next.historyIntervalSeconds))
+          : this.status.config.historyIntervalSeconds,
+      filterEnabled: typeof next.filterEnabled === 'boolean' ? next.filterEnabled : this.status.config.filterEnabled,
+      minSatellites: isFiniteNum(next.minSatellites) ? Math.max(0, Math.floor(next.minSatellites)) : this.status.config.minSatellites,
+      minFixQuality: isFiniteNum(next.minFixQuality) ? Math.max(0, Math.floor(next.minFixQuality)) : this.status.config.minFixQuality,
+      maxJumpMeters: isFiniteNum(next.maxJumpMeters) ? Math.max(0, next.maxJumpMeters) : this.status.config.maxJumpMeters,
+      maxSpeedKmh: isFiniteNum(next.maxSpeedKmh) ? Math.max(0, next.maxSpeedKmh) : this.status.config.maxSpeedKmh,
+      holdLastGoodSeconds: isFiniteNum(next.holdLastGoodSeconds) ? Math.max(0, Math.floor(next.holdLastGoodSeconds)) : this.status.config.holdLastGoodSeconds,
+      smoothingWindow: isFiniteNum(next.smoothingWindow) ? Math.max(1, Math.floor(next.smoothingWindow)) : this.status.config.smoothingWindow,
+      minUpdateIntervalMs: isFiniteNum(next.minUpdateIntervalMs) ? Math.max(0, Math.floor(next.minUpdateIntervalMs)) : this.status.config.minUpdateIntervalMs,
     };
     cfg.baudRate = clamp(cfg.baudRate || 9600, 4800, 921600);
+    cfg.smoothingWindow = clamp(cfg.smoothingWindow || 1, 1, 25);
+    cfg.minUpdateIntervalMs = clamp(cfg.minUpdateIntervalMs || 0, 0, 30_000);
 
     const changed =
       cfg.enabled !== this.status.config.enabled ||
       cfg.portPath !== this.status.config.portPath ||
-      cfg.baudRate !== this.status.config.baudRate;
+      cfg.baudRate !== this.status.config.baudRate ||
+      cfg.filterEnabled !== this.status.config.filterEnabled ||
+      cfg.minSatellites !== this.status.config.minSatellites ||
+      cfg.minFixQuality !== this.status.config.minFixQuality ||
+      cfg.maxJumpMeters !== this.status.config.maxJumpMeters ||
+      cfg.maxSpeedKmh !== this.status.config.maxSpeedKmh ||
+      cfg.holdLastGoodSeconds !== this.status.config.holdLastGoodSeconds ||
+      cfg.smoothingWindow !== this.status.config.smoothingWindow ||
+      cfg.minUpdateIntervalMs !== this.status.config.minUpdateIntervalMs;
 
     this.status = { ...this.status, config: cfg };
     this.emit('status', this.status);
+    if (cfg.smoothingWindow === 1) this.smoothWindow = [];
 
     if (!changed) return this.status;
 
@@ -311,25 +394,103 @@ export class GnssService extends EventEmitter {
       if (!parsed) continue;
 
       const now = Date.now();
-      const prev = this.status.fix;
-      const nextFix: GnssFix = {
-        ...prev,
+      const prevRaw = this.status.rawFix;
+      const nextRaw: GnssFix = {
+        ...prevRaw,
         ...parsed,
         lastSentenceAt: now,
-        latitude: parsed.latitude ?? prev.latitude,
-        longitude: parsed.longitude ?? prev.longitude,
-        altitudeM: parsed.altitudeM ?? prev.altitudeM,
-        speedKmh: parsed.speedKmh ?? prev.speedKmh,
-        satellites: parsed.satellites ?? prev.satellites,
-        fixQuality: parsed.fixQuality ?? prev.fixQuality,
-        valid: typeof parsed.valid === 'boolean' ? parsed.valid : prev.valid,
-        lastSentenceType: parsed.lastSentenceType ?? prev.lastSentenceType,
+        latitude: parsed.latitude ?? prevRaw.latitude,
+        longitude: parsed.longitude ?? prevRaw.longitude,
+        altitudeM: parsed.altitudeM ?? prevRaw.altitudeM,
+        speedKmh: parsed.speedKmh ?? prevRaw.speedKmh,
+        satellites: parsed.satellites ?? prevRaw.satellites,
+        fixQuality: parsed.fixQuality ?? prevRaw.fixQuality,
+        valid: typeof parsed.valid === 'boolean' ? parsed.valid : prevRaw.valid,
+        lastSentenceType: parsed.lastSentenceType ?? prevRaw.lastSentenceType,
       };
 
-      this.status = { ...this.status, fix: nextFix };
-      this.emit('fix', nextFix);
+      const filtered = this.applyFilter(nextRaw, now);
+      this.status = { ...this.status, rawFix: nextRaw, filteredFix: filtered };
+      this.emit('rawFix', nextRaw);
+      this.emit('filteredFix', filtered);
       this.emit('status', this.status);
     }
+  }
+
+  private applyFilter(raw: GnssFix, now: number): GnssFix {
+    const cfg = this.status.config;
+    const prev = this.status.filteredFix;
+
+    const minInterval = cfg.minUpdateIntervalMs ?? 0;
+    if (this.lastAcceptedAt != null && minInterval > 0 && now - this.lastAcceptedAt < minInterval) {
+      return prev;
+    }
+
+    if (!cfg.filterEnabled) {
+      this.lastAcceptedAt = now;
+      return raw;
+    }
+
+    const satsOk = (raw.satellites ?? 0) >= (cfg.minSatellites ?? 0);
+    const qualOk = (raw.fixQuality ?? 0) >= (cfg.minFixQuality ?? 0);
+    const validOk = !!raw.valid;
+    const coordsOk = isFiniteNum(raw.latitude) && isFiniteNum(raw.longitude);
+    if (!coordsOk || !satsOk || !qualOk || !validOk) {
+      const holdSec = cfg.holdLastGoodSeconds ?? 0;
+      if (this.lastGoodAt != null && holdSec > 0 && now - this.lastGoodAt <= holdSec * 1000) {
+        return prev;
+      }
+      return {
+        ...prev,
+        valid: false,
+        lastSentenceAt: raw.lastSentenceAt,
+        lastSentenceType: raw.lastSentenceType,
+      };
+    }
+
+    const hasPrevCoords =
+      isFiniteNum(prev.latitude) && isFiniteNum(prev.longitude) && isFiniteNum(prev.lastSentenceAt);
+    if (hasPrevCoords) {
+      const dtSec = Math.max(0.001, (now - (prev.lastSentenceAt as number)) / 1000);
+      const distM = haversineMeters(
+        prev.latitude as number,
+        prev.longitude as number,
+        raw.latitude as number,
+        raw.longitude as number
+      );
+      const impliedSpeedKmh = (distM / dtSec) * 3.6;
+      const maxSpeed = cfg.maxSpeedKmh ?? 0;
+      const maxJump = cfg.maxJumpMeters ?? 0;
+      if ((maxSpeed > 0 && impliedSpeedKmh > maxSpeed) || (maxJump > 0 && distM > maxJump)) {
+        const holdSec = cfg.holdLastGoodSeconds ?? 0;
+        if (this.lastGoodAt != null && holdSec > 0 && now - this.lastGoodAt <= holdSec * 1000) {
+          return prev;
+        }
+        return prev;
+      }
+    }
+
+    // Accept and smooth
+    let outLat = raw.latitude as number;
+    let outLon = raw.longitude as number;
+    const w = cfg.smoothingWindow ?? 1;
+    if (w > 1) {
+      this.smoothWindow.push({ lat: outLat, lon: outLon });
+      if (this.smoothWindow.length > w) this.smoothWindow.shift();
+      const lats = this.smoothWindow.map((p) => p.lat);
+      const lons = this.smoothWindow.map((p) => p.lon);
+      outLat = median(lats);
+      outLon = median(lons);
+    }
+
+    this.lastAcceptedAt = now;
+    this.lastGoodAt = now;
+
+    return {
+      ...raw,
+      latitude: outLat,
+      longitude: outLon,
+    };
   }
 }
 

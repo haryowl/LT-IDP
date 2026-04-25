@@ -19,6 +19,7 @@ import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
 import { EmailNotificationService } from '../electron/services/emailNotificationService';
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
+import { AdvancedRulesService } from '../electron/services/advancedRulesService';
 import { getLogger } from '../electron/services/logger';
 import { getSystemInfo } from '../electron/services/systemInfo';
 import { GnssService, type GnssConfig } from '../electron/services/gnssService';
@@ -60,6 +61,7 @@ let sparingService: SparingService;
 let emailNotificationService!: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 let gnssService: GnssService;
+let advancedRulesService: AdvancedRulesService;
 
 // WebSocket broadcast (assigned after services created)
 let broadcast: (msg: { type: string; data?: any }) => void = () => {};
@@ -236,11 +238,27 @@ function getGnssConfig(): GnssConfig {
   const baud = Number(baudRaw);
   const histRaw = (dbService.getSystemConfig('gnss:historyIntervalSeconds') || '').trim();
   const hist = Number(histRaw);
+  const filterEnabled = (dbService.getSystemConfig('gnss:filterEnabled') || '').trim();
+  const minSatRaw = (dbService.getSystemConfig('gnss:minSatellites') || '').trim();
+  const minFixRaw = (dbService.getSystemConfig('gnss:minFixQuality') || '').trim();
+  const maxJumpRaw = (dbService.getSystemConfig('gnss:maxJumpMeters') || '').trim();
+  const maxSpeedRaw = (dbService.getSystemConfig('gnss:maxSpeedKmh') || '').trim();
+  const holdRaw = (dbService.getSystemConfig('gnss:holdLastGoodSeconds') || '').trim();
+  const smoothRaw = (dbService.getSystemConfig('gnss:smoothingWindow') || '').trim();
+  const minUpdRaw = (dbService.getSystemConfig('gnss:minUpdateIntervalMs') || '').trim();
   return {
     enabled,
     portPath: portPathRaw || null,
     baudRate: Number.isFinite(baud) ? Math.floor(baud) : 9600,
     historyIntervalSeconds: Number.isFinite(hist) ? Math.max(1, Math.floor(hist)) : 5,
+    filterEnabled: filterEnabled ? filterEnabled === '1' : true,
+    minSatellites: Number.isFinite(Number(minSatRaw)) ? Math.max(0, Math.floor(Number(minSatRaw))) : 4,
+    minFixQuality: Number.isFinite(Number(minFixRaw)) ? Math.max(0, Math.floor(Number(minFixRaw))) : 1,
+    maxJumpMeters: Number.isFinite(Number(maxJumpRaw)) ? Math.max(0, Number(maxJumpRaw)) : 25,
+    maxSpeedKmh: Number.isFinite(Number(maxSpeedRaw)) ? Math.max(0, Number(maxSpeedRaw)) : 200,
+    holdLastGoodSeconds: Number.isFinite(Number(holdRaw)) ? Math.max(0, Math.floor(Number(holdRaw))) : 10,
+    smoothingWindow: Number.isFinite(Number(smoothRaw)) ? Math.max(1, Math.floor(Number(smoothRaw))) : 1,
+    minUpdateIntervalMs: Number.isFinite(Number(minUpdRaw)) ? Math.max(0, Math.floor(Number(minUpdRaw))) : 200,
   };
 }
 
@@ -254,11 +272,40 @@ function setGnssConfig(next: Partial<GnssConfig>) {
       typeof (next as any).historyIntervalSeconds === 'number'
         ? Math.max(1, Math.floor((next as any).historyIntervalSeconds))
         : (curr as any).historyIntervalSeconds ?? 5,
+    filterEnabled: typeof (next as any).filterEnabled === 'boolean' ? (next as any).filterEnabled : curr.filterEnabled,
+    minSatellites:
+      typeof (next as any).minSatellites === 'number' ? Math.max(0, Math.floor((next as any).minSatellites)) : curr.minSatellites,
+    minFixQuality:
+      typeof (next as any).minFixQuality === 'number' ? Math.max(0, Math.floor((next as any).minFixQuality)) : curr.minFixQuality,
+    maxJumpMeters:
+      typeof (next as any).maxJumpMeters === 'number' ? Math.max(0, (next as any).maxJumpMeters) : curr.maxJumpMeters,
+    maxSpeedKmh:
+      typeof (next as any).maxSpeedKmh === 'number' ? Math.max(0, (next as any).maxSpeedKmh) : curr.maxSpeedKmh,
+    holdLastGoodSeconds:
+      typeof (next as any).holdLastGoodSeconds === 'number'
+        ? Math.max(0, Math.floor((next as any).holdLastGoodSeconds))
+        : curr.holdLastGoodSeconds,
+    smoothingWindow:
+      typeof (next as any).smoothingWindow === 'number'
+        ? Math.max(1, Math.floor((next as any).smoothingWindow))
+        : curr.smoothingWindow,
+    minUpdateIntervalMs:
+      typeof (next as any).minUpdateIntervalMs === 'number'
+        ? Math.max(0, Math.floor((next as any).minUpdateIntervalMs))
+        : curr.minUpdateIntervalMs,
   };
   dbService.setSystemConfig('gnss:enabled', merged.enabled ? '1' : '0');
   dbService.setSystemConfig('gnss:portPath', merged.portPath || '');
   dbService.setSystemConfig('gnss:baudRate', String(merged.baudRate || 9600));
   dbService.setSystemConfig('gnss:historyIntervalSeconds', String(merged.historyIntervalSeconds || 5));
+  dbService.setSystemConfig('gnss:filterEnabled', merged.filterEnabled ? '1' : '0');
+  dbService.setSystemConfig('gnss:minSatellites', String(merged.minSatellites ?? 4));
+  dbService.setSystemConfig('gnss:minFixQuality', String(merged.minFixQuality ?? 1));
+  dbService.setSystemConfig('gnss:maxJumpMeters', String(merged.maxJumpMeters ?? 25));
+  dbService.setSystemConfig('gnss:maxSpeedKmh', String(merged.maxSpeedKmh ?? 200));
+  dbService.setSystemConfig('gnss:holdLastGoodSeconds', String(merged.holdLastGoodSeconds ?? 10));
+  dbService.setSystemConfig('gnss:smoothingWindow', String(merged.smoothingWindow ?? 1));
+  dbService.setSystemConfig('gnss:minUpdateIntervalMs', String(merged.minUpdateIntervalMs ?? 200));
 }
 
 app.get('/api/gnss/config', authMiddleware, (req, res) => {
@@ -416,6 +463,36 @@ app.post('/api/threshold-rules/:id/test', authMiddleware, async (req, res) => {
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Failed to test rule' });
   }
+});
+
+// ---------- Advanced Rules ----------
+app.get('/api/advanced-rules', authMiddleware, (req, res) => res.json(dbService.getAdvancedRules()));
+app.post('/api/advanced-rules', authMiddleware, (req, res) => {
+  const created = dbService.createAdvancedRule(req.body);
+  advancedRulesService.reloadRules();
+  res.json(created);
+});
+app.put('/api/advanced-rules/:id', authMiddleware, (req, res) => {
+  dbService.updateAdvancedRule(req.params.id, req.body);
+  advancedRulesService.reloadRules();
+  res.json(dbService.getAdvancedRuleById(req.params.id));
+});
+app.delete('/api/advanced-rules/:id', authMiddleware, (req, res) => {
+  dbService.deleteAdvancedRule(req.params.id);
+  advancedRulesService.reloadRules();
+  res.json({ ok: true });
+});
+app.post('/api/advanced-rules/:id/test', authMiddleware, async (req, res) => {
+  try {
+    await advancedRulesService.triggerNow(req.params.id);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Failed to test rule' });
+  }
+});
+app.get('/api/advanced-rules/events', authMiddleware, (req, res) => {
+  const limit = Number((req.query as any)?.limit);
+  res.json(dbService.getAdvancedRuleEvents(Number.isFinite(limit) ? limit : 200));
 });
 
 // ---------- System ----------
@@ -657,6 +734,12 @@ server.on('upgrade', (req, socket, head) => {
     ...mqttSubscriberService.getConnectionStatus(),
   ]);
   thresholdPublishService.startPeriodicCheck();
+  advancedRulesService = new AdvancedRulesService(dbService, {
+    dataDir: DATA_DIR,
+    mqttPublisher: mqttPublisherService,
+    httpClient: httpClientService,
+    publishEvent: (evt) => broadcast({ type: 'advanced-rule:event', data: evt }),
+  });
 
   broadcast = (msg: { type: string; data?: any }) => {
     const payload = JSON.stringify(msg);
@@ -697,6 +780,7 @@ server.on('upgrade', (req, socket, head) => {
   });
   dataMapperService.on('dataMapped', (data: any) => {
     thresholdPublishService.onMappedData(data);
+    advancedRulesService.onRealtimeData(data);
     broadcast({ type: 'data:realtime', data });
   });
   thresholdPublishService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));

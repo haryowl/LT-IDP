@@ -185,6 +185,17 @@ export const api = {
   },
   publishers: { list: () => (isElectron ? (window as any).electronAPI.publishers.list() : request('GET', '/publishers')), create: (p: any) => (isElectron ? (window as any).electronAPI.publishers.create(p) : request('POST', '/publishers', p)), update: (id: string, p: any) => (isElectron ? (window as any).electronAPI.publishers.update(id, p) : request('PUT', `/publishers/${id}`, p)), delete: (id: string) => (isElectron ? (window as any).electronAPI.publishers.delete(id) : request('DELETE', `/publishers/${id}`)), toggle: (id: string, enabled: boolean) => (isElectron ? (window as any).electronAPI.publishers.toggle(id, enabled) : request('POST', '/publishers/toggle', { id, enabled })) },
   thresholdRules: { list: () => (isElectron ? (window as any).electronAPI.thresholdRules.list() : request('GET', '/threshold-rules')), create: (r: any) => (isElectron ? (window as any).electronAPI.thresholdRules.create(r) : request('POST', '/threshold-rules', r)), update: (id: string, r: any) => (isElectron ? (window as any).electronAPI.thresholdRules.update(id, r) : request('PUT', `/threshold-rules/${id}`, r)), delete: (id: string) => (isElectron ? (window as any).electronAPI.thresholdRules.delete(id) : request('DELETE', `/threshold-rules/${id}`)), test: (id: string) => (isElectron ? (window as any).electronAPI.thresholdRules.test(id) : request('POST', `/threshold-rules/${id}/test`)) },
+  advancedRules: {
+    list: () => (isElectron ? Promise.reject(new Error('Advanced rules are only available in web mode')) : request('GET', '/advanced-rules')),
+    create: (r: any) => (isElectron ? Promise.reject(new Error('Advanced rules are only available in web mode')) : request('POST', '/advanced-rules', r)),
+    update: (id: string, r: any) => (isElectron ? Promise.reject(new Error('Advanced rules are only available in web mode')) : request('PUT', `/advanced-rules/${id}`, r)),
+    delete: (id: string) => (isElectron ? Promise.reject(new Error('Advanced rules are only available in web mode')) : request('DELETE', `/advanced-rules/${id}`)),
+    test: (id: string) => (isElectron ? Promise.reject(new Error('Advanced rules are only available in web mode')) : request('POST', `/advanced-rules/${id}/test`)),
+    events: (limit?: number) =>
+      isElectron
+        ? Promise.reject(new Error('Advanced rules are only available in web mode'))
+        : request('GET', `/advanced-rules/events?limit=${encodeURIComponent(String(limit ?? 200))}`),
+  },
   gnss: {
     getConfig: () => (isElectron ? Promise.reject(new Error('GNSS config is only available in web mode')) : request('GET', '/gnss/config')),
     saveConfig: (c: any) => (isElectron ? Promise.reject(new Error('GNSS config is only available in web mode')) : request('POST', '/gnss/config', c)),
