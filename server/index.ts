@@ -539,6 +539,7 @@ function getGnssConfig(): GnssConfig {
   const minFixRaw = (dbService.getSystemConfig('gnss:minFixQuality') || '').trim();
   const maxJumpRaw = (dbService.getSystemConfig('gnss:maxJumpMeters') || '').trim();
   const maxSpeedRaw = (dbService.getSystemConfig('gnss:maxSpeedKmh') || '').trim();
+  const minTripSpdRaw = (dbService.getSystemConfig('gnss:minTripSpeedKmh') || '').trim();
   const holdRaw = (dbService.getSystemConfig('gnss:holdLastGoodSeconds') || '').trim();
   const smoothRaw = (dbService.getSystemConfig('gnss:smoothingWindow') || '').trim();
   const minUpdRaw = (dbService.getSystemConfig('gnss:minUpdateIntervalMs') || '').trim();
@@ -552,6 +553,7 @@ function getGnssConfig(): GnssConfig {
     minFixQuality: Number.isFinite(Number(minFixRaw)) ? Math.max(0, Math.floor(Number(minFixRaw))) : 1,
     maxJumpMeters: Number.isFinite(Number(maxJumpRaw)) ? Math.max(0, Number(maxJumpRaw)) : 25,
     maxSpeedKmh: Number.isFinite(Number(maxSpeedRaw)) ? Math.max(0, Number(maxSpeedRaw)) : 200,
+    minTripSpeedKmh: Number.isFinite(Number(minTripSpdRaw)) ? Math.max(0, Math.min(500, Number(minTripSpdRaw))) : 0,
     holdLastGoodSeconds: Number.isFinite(Number(holdRaw)) ? Math.max(0, Math.floor(Number(holdRaw))) : 10,
     smoothingWindow: Number.isFinite(Number(smoothRaw)) ? Math.max(1, Math.floor(Number(smoothRaw))) : 1,
     minUpdateIntervalMs: Number.isFinite(Number(minUpdRaw)) ? Math.max(0, Math.floor(Number(minUpdRaw))) : 200,
@@ -577,6 +579,10 @@ function setGnssConfig(next: Partial<GnssConfig>) {
       typeof (next as any).maxJumpMeters === 'number' ? Math.max(0, (next as any).maxJumpMeters) : curr.maxJumpMeters,
     maxSpeedKmh:
       typeof (next as any).maxSpeedKmh === 'number' ? Math.max(0, (next as any).maxSpeedKmh) : curr.maxSpeedKmh,
+    minTripSpeedKmh:
+      typeof (next as any).minTripSpeedKmh === 'number'
+        ? Math.max(0, Math.min(500, (next as any).minTripSpeedKmh))
+        : (curr as any).minTripSpeedKmh ?? 0,
     holdLastGoodSeconds:
       typeof (next as any).holdLastGoodSeconds === 'number'
         ? Math.max(0, Math.floor((next as any).holdLastGoodSeconds))
@@ -599,6 +605,7 @@ function setGnssConfig(next: Partial<GnssConfig>) {
   dbService.setSystemConfig('gnss:minFixQuality', String(merged.minFixQuality ?? 1));
   dbService.setSystemConfig('gnss:maxJumpMeters', String(merged.maxJumpMeters ?? 25));
   dbService.setSystemConfig('gnss:maxSpeedKmh', String(merged.maxSpeedKmh ?? 200));
+  dbService.setSystemConfig('gnss:minTripSpeedKmh', String((merged as any).minTripSpeedKmh ?? 0));
   dbService.setSystemConfig('gnss:holdLastGoodSeconds', String(merged.holdLastGoodSeconds ?? 10));
   dbService.setSystemConfig('gnss:smoothingWindow', String(merged.smoothingWindow ?? 1));
   dbService.setSystemConfig('gnss:minUpdateIntervalMs', String(merged.minUpdateIntervalMs ?? 200));
@@ -622,6 +629,15 @@ app.post('/api/gnss/config', authMiddleware, async (req, res) => {
 
 app.get('/api/gnss/status', authMiddleware, (req, res) => {
   res.json(gnssService.getStatus());
+});
+
+app.post('/api/gnss/reset-trip-distance', authMiddleware, async (req, res) => {
+  try {
+    const status = await gnssService.resetTripDistance();
+    res.json({ ok: true, status });
+  } catch (e: any) {
+    res.status(500).json({ error: errMsg(e) });
+  }
 });
 
 // ---------- MQTT ----------

@@ -234,6 +234,22 @@ const ParameterMappings: React.FC = () => {
         label: 'GNSS — last fix age (ms)',
         description: 'Milliseconds since the last NMEA sentence that updated the fix. Data type: number.',
       },
+      {
+        id: 'system-gnss-course-deg',
+        label: 'GNSS — course / COG (deg)',
+        description: 'Course over ground in degrees (0–360) from RMC track when available. Data type: number.',
+      },
+      {
+        id: 'system-gnss-bearing-deg',
+        label: 'GNSS — movement bearing (deg)',
+        description: 'Bearing in degrees (0–360) from the previous accepted position to the current fix (trip odometer path). Data type: number.',
+      },
+      {
+        id: 'system-gnss-trip-distance-m',
+        label: 'GNSS — trip distance (m)',
+        description:
+          'Accumulated distance in meters along accepted fixes (optionally only when speed ≥ GNSS “Min speed for trip”); reset from Settings or POST /api/gnss/reset-trip-distance. Data type: number.',
+      },
     ],
     []
   );

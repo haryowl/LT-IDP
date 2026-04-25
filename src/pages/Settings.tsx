@@ -77,6 +77,8 @@ interface GnssConfig {
   minFixQuality?: number;
   maxJumpMeters?: number;
   maxSpeedKmh?: number;
+  /** Minimum SOG (km/h) to add to trip distance; 0 = off */
+  minTripSpeedKmh?: number;
   holdLastGoodSeconds?: number;
   smoothingWindow?: number;
   minUpdateIntervalMs?: number;
@@ -95,6 +97,9 @@ interface GnssStatus {
     longitude: number | null;
     altitudeM: number | null;
     speedKmh: number | null;
+    courseDegrees?: number | null;
+    bearingDegrees?: number | null;
+    tripDistanceMeters?: number;
     satellites: number | null;
     fixQuality: number | null;
     lastSentenceAt: number | null;
@@ -106,6 +111,9 @@ interface GnssStatus {
     longitude: number | null;
     altitudeM: number | null;
     speedKmh: number | null;
+    courseDegrees?: number | null;
+    bearingDegrees?: number | null;
+    tripDistanceMeters?: number;
     satellites: number | null;
     fixQuality: number | null;
     lastSentenceAt: number | null;
@@ -208,6 +216,17 @@ function formatDuration(sec: number): string {
 function fmtCoord(v: number | null, digits = 6): string {
   if (v == null || !Number.isFinite(v)) return '—';
   return v.toFixed(digits);
+}
+
+function fmtDeg(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${v.toFixed(0)}°`;
+}
+
+function fmtTripM(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  if (v < 1000) return `${v.toFixed(0)} m`;
+  return `${(v / 1000).toFixed(3)} km`;
 }
 
 function usageTone(percent: number): 'success' | 'warning' | 'error' {
@@ -1011,6 +1030,7 @@ const Settings: React.FC = () => {
   const [gnssStatus, setGnssStatus] = useState<GnssStatus | null>(null);
   const [gnssLoading, setGnssLoading] = useState(false);
   const [gnssSaving, setGnssSaving] = useState(false);
+  const [gnssTripResetting, setGnssTripResetting] = useState(false);
 
   const timezoneOptions = useMemo(() => {
     const tz: string[] = [];
@@ -1095,6 +1115,21 @@ const Settings: React.FC = () => {
       setError(e?.message || 'Failed to save GNSS config');
     } finally {
       setGnssSaving(false);
+    }
+  };
+
+  const resetGnssTripDistance = async () => {
+    try {
+      setGnssTripResetting(true);
+      const res: any = await api.gnss?.resetTripDistance?.();
+      if (res?.status) setGnssStatus(res.status as GnssStatus);
+      else await loadGnss();
+      setSuccess('Trip distance reset to 0');
+      setTimeout(() => setSuccess(''), 2500);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to reset trip distance');
+    } finally {
+      setGnssTripResetting(false);
     }
   };
 
@@ -1694,6 +1729,16 @@ const Settings: React.FC = () => {
                 </Grid>
                 <Grid item xs={6}>
                   <TextField
+                    label="Min speed for trip (km/h)"
+                    type="number"
+                    value={gnssConfig.minTripSpeedKmh ?? 0}
+                    onChange={(e) => setGnssConfig((p) => ({ ...p, minTripSpeedKmh: Number(e.target.value || 0) }))}
+                    inputProps={{ min: 0, max: 500, step: 0.5 }}
+                    helperText="0 = off. Uses RMC speed; below this, trip anchor moves without adding distance."
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
                     label="Hold last good (sec)"
                     type="number"
                     value={gnssConfig.holdLastGoodSeconds ?? 10}
@@ -1724,9 +1769,18 @@ const Settings: React.FC = () => {
                 </Grid>
               </Grid>
 
-              <Box>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
                 <Button variant="contained" onClick={saveGnssConfig} disabled={gnssSaving || gnssLoading} disableElevation>
                   {gnssSaving ? 'Saving…' : 'Save GNSS settings'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={resetGnssTripDistance}
+                  disabled={gnssTripResetting || gnssLoading}
+                  disableElevation
+                >
+                  {gnssTripResetting ? 'Resetting…' : 'Reset trip distance'}
                 </Button>
               </Box>
 
@@ -1766,6 +1820,11 @@ const Settings: React.FC = () => {
                         Alt: {fix?.altitudeM != null ? `${fix.altitudeM.toFixed(1)} m` : '—'} · Speed:{' '}
                         {fix?.speedKmh != null ? `${fix.speedKmh.toFixed(1)} km/h` : '—'} · Fix quality:{' '}
                         {fix?.fixQuality != null ? fix.fixQuality : '—'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Course (COG): <strong>{fmtDeg(fix?.courseDegrees)}</strong> · Movement bearing:{' '}
+                        <strong>{fmtDeg(fix?.bearingDegrees)}</strong> · Trip distance:{' '}
+                        <strong>{fmtTripM(fix?.tripDistanceMeters)}</strong>
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
                         Last update:{' '}

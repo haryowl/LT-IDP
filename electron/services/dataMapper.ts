@@ -467,6 +467,12 @@ export class DataMapperService extends EventEmitter {
           value = fix.valid ? 1 : 0;
         } else if (sourceId === 'system-gnss-last-fix-age-ms') {
           value = fix.lastSentenceAt ? Math.max(0, now - fix.lastSentenceAt) : null;
+        } else if (sourceId === 'system-gnss-course-deg') {
+          value = fix.courseDegrees;
+        } else if (sourceId === 'system-gnss-bearing-deg') {
+          value = fix.bearingDegrees;
+        } else if (sourceId === 'system-gnss-trip-distance-m') {
+          value = fix.tripDistanceMeters;
         } else {
           getLogger().warn(`Unknown GNSS system source_device_id: ${sourceId}, skipping mapping ${mapping.name}`);
           continue;

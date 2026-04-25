@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SerialPort } from 'serialport';
 import { getLogger } from './logger';
 
@@ -13,6 +15,8 @@ export type GnssConfig = {
   minFixQuality?: number;
   maxJumpMeters?: number;
   maxSpeedKmh?: number;
+  /** Minimum reported speed (km/h) to count toward trip distance; 0 = disabled */
+  minTripSpeedKmh?: number;
   holdLastGoodSeconds?: number;
   smoothingWindow?: number;
   minUpdateIntervalMs?: number;
@@ -24,6 +28,12 @@ export type GnssFix = {
   longitude: number | null;
   altitudeM: number | null;
   speedKmh: number | null;
+  /** Course over ground from RMC track angle (degrees, 0–360), when available */
+  courseDegrees: number | null;
+  /** Bearing from previous accepted position to current (degrees, 0–360) */
+  bearingDegrees: number | null;
+  /** Accumulated distance along accepted filtered fixes (meters); resettable */
+  tripDistanceMeters: number;
   satellites: number | null;
   fixQuality: number | null;
   lastSentenceAt: number | null;
@@ -47,6 +57,17 @@ function clamp(n: number, min: number, max: number): number {
 
 function isFiniteNum(v: any): v is number {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+function bearingDegrees(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δλ = toRad(lon2 - lon1);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  const θ = Math.atan2(y, x);
+  return ((θ * 180) / Math.PI + 360) % 360;
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -121,10 +142,17 @@ function parseRmc(parts: string[]): Partial<GnssFix> | null {
   const lat = nmeaToDecimal(parts[3] ?? '', parts[4] ?? '');
   const lon = nmeaToDecimal(parts[5] ?? '', parts[6] ?? '');
   const speedKmh = knotsToKmh(parts[7] ?? '');
+  const trackStr = (parts[8] ?? '').trim();
+  let courseDegrees: number | null = null;
+  if (trackStr !== '') {
+    const tr = Number(trackStr);
+    if (Number.isFinite(tr)) courseDegrees = ((tr % 360) + 360) % 360;
+  }
   return {
     latitude: Number.isFinite(lat as number) ? (lat as number) : null,
     longitude: Number.isFinite(lon as number) ? (lon as number) : null,
     speedKmh: Number.isFinite(speedKmh as number) ? (speedKmh as number) : null,
+    courseDegrees,
     valid: status === 'A',
     lastSentenceType: 'RMC',
   };
@@ -150,6 +178,11 @@ export class GnssService extends EventEmitter {
   private lastAcceptedAt: number | null = null;
   private lastGoodAt: number | null = null;
   private smoothWindow: Array<{ lat: number; lon: number }> = [];
+  private tripMeters = 0;
+  private lastTripLat: number | null = null;
+  private lastTripLon: number | null = null;
+  private lastBearingDegrees: number | null = null;
+  private tripSaveTimer: NodeJS.Timeout | null = null;
 
   private status: GnssStatus = {
     config: {
@@ -161,6 +194,7 @@ export class GnssService extends EventEmitter {
       minFixQuality: 1,
       maxJumpMeters: 25,
       maxSpeedKmh: 200,
+      minTripSpeedKmh: 0,
       holdLastGoodSeconds: 10,
       smoothingWindow: 1,
       minUpdateIntervalMs: 200,
@@ -176,6 +210,9 @@ export class GnssService extends EventEmitter {
       longitude: null,
       altitudeM: null,
       speedKmh: null,
+      courseDegrees: null,
+      bearingDegrees: null,
+      tripDistanceMeters: 0,
       satellites: null,
       fixQuality: null,
       lastSentenceAt: null,
@@ -187,6 +224,9 @@ export class GnssService extends EventEmitter {
       longitude: null,
       altitudeM: null,
       speedKmh: null,
+      courseDegrees: null,
+      bearingDegrees: null,
+      tripDistanceMeters: 0,
       satellites: null,
       fixQuality: null,
       lastSentenceAt: null,
@@ -196,6 +236,12 @@ export class GnssService extends EventEmitter {
 
   constructor(private dataDir: string) {
     super();
+    this.loadTripStateSync();
+    this.status = {
+      ...this.status,
+      rawFix: this.stampNav(this.status.rawFix),
+      filteredFix: this.stampNav(this.status.filteredFix),
+    };
   }
 
   getStatus(): GnssStatus {
@@ -208,6 +254,107 @@ export class GnssService extends EventEmitter {
 
   getRawFix(): GnssFix {
     return this.status.rawFix;
+  }
+
+  /** Clear trip odometer and anchor; persisted to disk */
+  async resetTripDistance(): Promise<GnssStatus> {
+    this.tripMeters = 0;
+    this.lastTripLat = null;
+    this.lastTripLon = null;
+    this.lastBearingDegrees = null;
+    if (this.tripSaveTimer) {
+      clearTimeout(this.tripSaveTimer);
+      this.tripSaveTimer = null;
+    }
+    this.flushTripStateSync();
+    this.status = {
+      ...this.status,
+      rawFix: this.stampNav(this.status.rawFix),
+      filteredFix: this.stampNav(this.status.filteredFix),
+    };
+    this.emit('status', this.status);
+    return this.status;
+  }
+
+  private tripStatePath(): string {
+    return path.join(this.dataDir, 'gnss-trip-state.json');
+  }
+
+  private loadTripStateSync(): void {
+    try {
+      const raw = fs.readFileSync(this.tripStatePath(), 'utf8');
+      const o = JSON.parse(raw) as {
+        tripDistanceMeters?: unknown;
+        lastTripLat?: unknown;
+        lastTripLon?: unknown;
+      };
+      if (typeof o.tripDistanceMeters === 'number' && Number.isFinite(o.tripDistanceMeters) && o.tripDistanceMeters >= 0) {
+        this.tripMeters = o.tripDistanceMeters;
+      }
+      if (typeof o.lastTripLat === 'number' && Number.isFinite(o.lastTripLat)) this.lastTripLat = o.lastTripLat;
+      else this.lastTripLat = null;
+      if (typeof o.lastTripLon === 'number' && Number.isFinite(o.lastTripLon)) this.lastTripLon = o.lastTripLon;
+      else this.lastTripLon = null;
+    } catch {
+      // missing or invalid file
+    }
+  }
+
+  private flushTripStateSync(): void {
+    try {
+      const dir = this.dataDir;
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        this.tripStatePath(),
+        JSON.stringify({
+          tripDistanceMeters: this.tripMeters,
+          lastTripLat: this.lastTripLat,
+          lastTripLon: this.lastTripLon,
+        }),
+        'utf8'
+      );
+    } catch (e: any) {
+      this.log().warn('GNSS trip state save failed:', e?.message || String(e));
+    }
+  }
+
+  private scheduleTripStateSave(): void {
+    if (this.tripSaveTimer) return;
+    this.tripSaveTimer = setTimeout(() => {
+      this.tripSaveTimer = null;
+      this.flushTripStateSync();
+    }, 400);
+  }
+
+  private stampNav(f: GnssFix): GnssFix {
+    return { ...f, tripDistanceMeters: this.tripMeters, bearingDegrees: this.lastBearingDegrees };
+  }
+
+  private tryAccumulateTrip(lat: number, lon: number, cfg: GnssConfig, speedKmh: number | null): void {
+    const maxJump = cfg.maxJumpMeters ?? 0;
+    const minTripSpd = cfg.minTripSpeedKmh ?? 0;
+    if (this.lastTripLat == null || this.lastTripLon == null || !isFiniteNum(this.lastTripLat) || !isFiniteNum(this.lastTripLon)) {
+      this.lastTripLat = lat;
+      this.lastTripLon = lon;
+      this.lastBearingDegrees = null;
+      this.scheduleTripStateSave();
+      return;
+    }
+    const d = haversineMeters(this.lastTripLat, this.lastTripLon, lat, lon);
+    if (maxJump > 0 && d > maxJump) return;
+    if (d < 0.05) return;
+    if (minTripSpd > 0 && (!isFiniteNum(speedKmh) || speedKmh < minTripSpd)) {
+      // Stationary / slow: move anchor only so drift does not accumulate into trip distance
+      this.lastTripLat = lat;
+      this.lastTripLon = lon;
+      this.scheduleTripStateSave();
+      return;
+    }
+    this.lastBearingDegrees = bearingDegrees(this.lastTripLat, this.lastTripLon, lat, lon);
+    this.tripMeters += d;
+    this.lastTripLat = lat;
+    this.lastTripLon = lon;
+    this.scheduleTripStateSave();
   }
 
   async applyConfig(next: Partial<GnssConfig>): Promise<GnssStatus> {
@@ -227,6 +374,9 @@ export class GnssService extends EventEmitter {
       minFixQuality: isFiniteNum(next.minFixQuality) ? Math.max(0, Math.floor(next.minFixQuality)) : this.status.config.minFixQuality,
       maxJumpMeters: isFiniteNum(next.maxJumpMeters) ? Math.max(0, next.maxJumpMeters) : this.status.config.maxJumpMeters,
       maxSpeedKmh: isFiniteNum(next.maxSpeedKmh) ? Math.max(0, next.maxSpeedKmh) : this.status.config.maxSpeedKmh,
+      minTripSpeedKmh: isFiniteNum(next.minTripSpeedKmh)
+        ? clamp(next.minTripSpeedKmh, 0, 500)
+        : (this.status.config.minTripSpeedKmh ?? 0),
       holdLastGoodSeconds: isFiniteNum(next.holdLastGoodSeconds) ? Math.max(0, Math.floor(next.holdLastGoodSeconds)) : this.status.config.holdLastGoodSeconds,
       smoothingWindow: isFiniteNum(next.smoothingWindow) ? Math.max(1, Math.floor(next.smoothingWindow)) : this.status.config.smoothingWindow,
       minUpdateIntervalMs: isFiniteNum(next.minUpdateIntervalMs) ? Math.max(0, Math.floor(next.minUpdateIntervalMs)) : this.status.config.minUpdateIntervalMs,
@@ -272,6 +422,11 @@ export class GnssService extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
+    if (this.tripSaveTimer) {
+      clearTimeout(this.tripSaveTimer);
+      this.tripSaveTimer = null;
+    }
+    this.flushTripStateSync();
     await this.disconnect('shutdown');
   }
 
@@ -403,6 +558,7 @@ export class GnssService extends EventEmitter {
         longitude: parsed.longitude ?? prevRaw.longitude,
         altitudeM: parsed.altitudeM ?? prevRaw.altitudeM,
         speedKmh: parsed.speedKmh ?? prevRaw.speedKmh,
+        courseDegrees: parsed.courseDegrees !== undefined && parsed.courseDegrees !== null ? parsed.courseDegrees : prevRaw.courseDegrees,
         satellites: parsed.satellites ?? prevRaw.satellites,
         fixQuality: parsed.fixQuality ?? prevRaw.fixQuality,
         valid: typeof parsed.valid === 'boolean' ? parsed.valid : prevRaw.valid,
@@ -410,7 +566,7 @@ export class GnssService extends EventEmitter {
       };
 
       const filtered = this.applyFilter(nextRaw, now);
-      this.status = { ...this.status, rawFix: nextRaw, filteredFix: filtered };
+      this.status = { ...this.status, rawFix: this.stampNav(nextRaw), filteredFix: filtered };
       this.emit('rawFix', nextRaw);
       this.emit('filteredFix', filtered);
       this.emit('status', this.status);
@@ -423,12 +579,15 @@ export class GnssService extends EventEmitter {
 
     const minInterval = cfg.minUpdateIntervalMs ?? 0;
     if (this.lastAcceptedAt != null && minInterval > 0 && now - this.lastAcceptedAt < minInterval) {
-      return prev;
+      return this.stampNav(prev);
     }
 
     if (!cfg.filterEnabled) {
       this.lastAcceptedAt = now;
-      return raw;
+      if (isFiniteNum(raw.latitude) && isFiniteNum(raw.longitude) && raw.valid) {
+        this.tryAccumulateTrip(raw.latitude, raw.longitude, cfg, raw.speedKmh);
+      }
+      return this.stampNav(raw);
     }
 
     const satsOk = (raw.satellites ?? 0) >= (cfg.minSatellites ?? 0);
@@ -438,14 +597,14 @@ export class GnssService extends EventEmitter {
     if (!coordsOk || !satsOk || !qualOk || !validOk) {
       const holdSec = cfg.holdLastGoodSeconds ?? 0;
       if (this.lastGoodAt != null && holdSec > 0 && now - this.lastGoodAt <= holdSec * 1000) {
-        return prev;
+        return this.stampNav(prev);
       }
-      return {
+      return this.stampNav({
         ...prev,
         valid: false,
         lastSentenceAt: raw.lastSentenceAt,
         lastSentenceType: raw.lastSentenceType,
-      };
+      });
     }
 
     const hasPrevCoords =
@@ -464,9 +623,9 @@ export class GnssService extends EventEmitter {
       if ((maxSpeed > 0 && impliedSpeedKmh > maxSpeed) || (maxJump > 0 && distM > maxJump)) {
         const holdSec = cfg.holdLastGoodSeconds ?? 0;
         if (this.lastGoodAt != null && holdSec > 0 && now - this.lastGoodAt <= holdSec * 1000) {
-          return prev;
+          return this.stampNav(prev);
         }
-        return prev;
+        return this.stampNav(prev);
       }
     }
 
@@ -485,12 +644,15 @@ export class GnssService extends EventEmitter {
 
     this.lastAcceptedAt = now;
     this.lastGoodAt = now;
+    if (isFiniteNum(outLat) && isFiniteNum(outLon)) {
+      this.tryAccumulateTrip(outLat, outLon, cfg, raw.speedKmh);
+    }
 
-    return {
+    return this.stampNav({
       ...raw,
       latitude: outLat,
       longitude: outLon,
-    };
+    });
   }
 }
 
