@@ -1174,6 +1174,7 @@ server.on('upgrade', (req, socket, head) => {
     mqttPublisher: mqttPublisherService,
     httpClient: httpClientService,
     publishEvent: (evt) => broadcast({ type: 'advanced-rule:event', data: evt }),
+    modbusWrite: ({ deviceId, registerId, value }) => modbusService.writeMappedRegister(deviceId, registerId, value),
   });
 
   broadcast = (msg: { type: string; data?: any }) => {

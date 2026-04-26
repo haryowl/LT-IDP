@@ -10,6 +10,8 @@ type RuleRuntimeState = {
   lastEvalAt?: number;
   /** last boolean condition result */
   lastCondition?: boolean;
+  modbusToggleTimer?: NodeJS.Timeout;
+  modbusToggleState?: boolean;
 };
 
 export type AdvancedRulesServiceDeps = {
@@ -17,6 +19,7 @@ export type AdvancedRulesServiceDeps = {
   mqttPublisher?: MqttPublisherService;
   httpClient?: HttpClientService;
   publishEvent?: (evt: AdvancedRuleEvent) => void;
+  modbusWrite?: (payload: { deviceId: string; registerId: string; value: unknown }) => Promise<void>;
 };
 
 type ValueCacheItem = {
@@ -155,6 +158,7 @@ export class AdvancedRulesService extends EventEmitter {
   private runtime = new Map<string, RuleRuntimeState>();
   private cache = new Map<string, ValueCacheItem>();
   private timers = new Map<string, NodeJS.Timeout>();
+  private modbusWriteChainByDevice = new Map<string, Promise<void>>();
 
   constructor(
     private db: DatabaseService,
@@ -169,6 +173,12 @@ export class AdvancedRulesService extends EventEmitter {
   }
 
   reloadRules(): void {
+    // Stop any running modbus toggle intervals before we drop runtime state
+    for (const [ruleId, rt] of this.runtime.entries()) {
+      if (rt.modbusToggleTimer) clearInterval(rt.modbusToggleTimer as any);
+      rt.modbusToggleTimer = undefined;
+      rt.modbusToggleState = undefined;
+    }
     this.rules = new Map(this.db.getAdvancedRules().map((r) => [r.id, r]));
     this.compiled.clear();
     this.runtime.clear();
@@ -270,6 +280,7 @@ export class AdvancedRulesService extends EventEmitter {
 
     const mode = rule.reTriggerMode || 'edge_only';
     if (mode === 'edge_only') {
+      // Edge-only is based on the previous condition, so callers must not have overwritten rt.lastCondition yet.
       if (rt.lastCondition === true && condition === true) return { ok: false, why: 'edge_only' };
     } else if (mode === 'periodic_while_true') {
       const intervalMs = Math.max(1, rule.reTriggerIntervalSeconds || 60) * 1000;
@@ -277,6 +288,81 @@ export class AdvancedRulesService extends EventEmitter {
     }
 
     return { ok: true };
+  }
+
+  private enqueueModbusWrite(deviceId: string, op: () => Promise<void>): Promise<void> {
+    const prev = this.modbusWriteChainByDevice.get(deviceId) || Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(op)
+      .finally(() => {
+        if (this.modbusWriteChainByDevice.get(deviceId) === next) {
+          // keep map from growing unbounded if no further writes
+          this.modbusWriteChainByDevice.delete(deviceId);
+        }
+      });
+    this.modbusWriteChainByDevice.set(deviceId, next);
+    return next;
+  }
+
+  private startModbusToggle(rule: AdvancedRule): void {
+    const cfg = rule.actions?.modbusWrite;
+    if (!cfg?.enabled) return;
+    if (cfg.mode !== 'toggle_interval') return;
+    if (!this.deps.modbusWrite) return;
+
+    const rt = this.runtime.get(rule.id) || {};
+    if (rt.modbusToggleTimer) return; // already running
+
+    const deviceId = String(cfg.deviceId || '');
+    const registerId = String(cfg.registerId || '');
+    if (!deviceId || !registerId) return;
+
+    const intervalMs = clampInt(cfg.intervalSeconds, 1, 3600, 1) * 1000;
+    const valueTrue = cfg.valueTrue !== undefined ? cfg.valueTrue : true;
+    const valueFalse = cfg.valueFalse !== undefined ? cfg.valueFalse : false;
+
+    rt.modbusToggleState = true;
+    // Write immediately then continue toggling
+    void this.enqueueModbusWrite(deviceId, async () => this.deps.modbusWrite!({ deviceId, registerId, value: valueTrue })).catch((e: any) => {
+      this.log().error(`Advanced rule "${rule.name}" modbus toggle write failed:`, e?.message || String(e));
+    });
+
+    const t = setInterval(() => {
+      const cur = this.runtime.get(rule.id);
+      if (!cur?.modbusToggleTimer) return;
+      cur.modbusToggleState = !cur.modbusToggleState;
+      const value = cur.modbusToggleState ? valueTrue : valueFalse;
+      void this.enqueueModbusWrite(deviceId, async () => this.deps.modbusWrite!({ deviceId, registerId, value })).catch((e: any) => {
+        this.log().error(`Advanced rule "${rule.name}" modbus toggle write failed:`, e?.message || String(e));
+      });
+    }, intervalMs);
+
+    rt.modbusToggleTimer = t;
+    this.runtime.set(rule.id, rt);
+  }
+
+  private stopModbusToggle(rule: AdvancedRule): void {
+    const cfg = rule.actions?.modbusWrite;
+    const rt = this.runtime.get(rule.id);
+    if (!rt?.modbusToggleTimer) return;
+    clearInterval(rt.modbusToggleTimer as any);
+    rt.modbusToggleTimer = undefined;
+    rt.modbusToggleState = undefined;
+    this.runtime.set(rule.id, rt);
+
+    if (!cfg?.enabled) return;
+    if (cfg.mode !== 'toggle_interval') return;
+    if (cfg.writeFalseOnStop === false) return;
+    if (!this.deps.modbusWrite) return;
+
+    const deviceId = String(cfg.deviceId || '');
+    const registerId = String(cfg.registerId || '');
+    if (!deviceId || !registerId) return;
+    const valueFalse = cfg.valueFalse !== undefined ? cfg.valueFalse : false;
+    void this.enqueueModbusWrite(deviceId, async () => this.deps.modbusWrite!({ deviceId, registerId, value: valueFalse })).catch((e: any) => {
+      this.log().error(`Advanced rule "${rule.name}" modbus stop write failed:`, e?.message || String(e));
+    });
   }
 
   private buildSnapshot(rule: AdvancedRule): any[] {
@@ -307,9 +393,19 @@ export class AdvancedRulesService extends EventEmitter {
       const condition = isTruthy(result);
 
       const rt = this.runtime.get(rule.id) || {};
-      rt.lastEvalAt = now;
-      rt.lastCondition = condition;
-      this.runtime.set(rule.id, rt);
+      const prevCondition = rt.lastCondition;
+      // Update lastCondition AFTER we compute transitions/gating (edge-only depends on previous)
+      if (prevCondition === true && condition === false) {
+        this.stopModbusToggle(rule);
+      } else if ((prevCondition !== true || prevCondition === undefined) && condition === true) {
+        this.startModbusToggle(rule);
+      }
+
+      // Transition handlers may have updated runtime state; re-read before persisting lastCondition.
+      const rt2 = this.runtime.get(rule.id) || rt;
+      rt2.lastEvalAt = now;
+      rt2.lastCondition = condition;
+      this.runtime.set(rule.id, rt2);
 
       if (!condition) return;
       const gate = this.canTrigger(rule, condition, now);
@@ -366,6 +462,32 @@ export class AdvancedRulesService extends EventEmitter {
 
   private async fireActions(rule: AdvancedRule, event: AdvancedRuleEvent): Promise<void> {
     // Alert action is already represented by inserting the event and broadcasting it.
+    const modbus = rule.actions?.modbusWrite;
+    if (modbus?.enabled && modbus.mode === 'once' && this.deps.modbusWrite) {
+      const deviceId = String(modbus.deviceId || '');
+      const registerId = String(modbus.registerId || '');
+      if (deviceId && registerId) {
+        const value = modbus.valueTrue !== undefined ? modbus.valueTrue : true;
+        try {
+          await this.enqueueModbusWrite(deviceId, async () => this.deps.modbusWrite!({ deviceId, registerId, value }));
+        } catch (e: any) {
+          const message = e?.message || String(e);
+          this.log().error(`Advanced rule "${rule.name}" modbus write failed:`, message);
+          const evt: Omit<AdvancedRuleEvent, 'id'> = {
+            ruleId: rule.id,
+            ruleName: rule.name,
+            severity: 'error',
+            message: `Advanced rule "${rule.name}" Modbus write failed: ${message}`,
+            triggeredAt: nowMs(),
+            payload: { type: 'advanced-rule-modbus-error', ruleId: rule.id, ruleName: rule.name, message, action: modbus },
+          };
+          const inserted = this.db.insertAdvancedRuleEvent(evt);
+          this.emit('event', inserted);
+          this.deps.publishEvent?.(inserted);
+        }
+      }
+    }
+
     const publishIds = rule.actions?.publish?.publisherIds || [];
     if (!publishIds.length) return;
 

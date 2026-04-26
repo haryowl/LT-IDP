@@ -214,9 +214,26 @@ export interface AdvancedRuleActionAlert {
   severity: 'info' | 'warning' | 'error';
 }
 
+export interface AdvancedRuleActionModbusWrite {
+  enabled: boolean;
+  deviceId: string;
+  registerId: string;
+  /** Write behavior while rule is true */
+  mode: 'once' | 'toggle_interval';
+  /** Value to write when toggle state is TRUE (default true) */
+  valueTrue?: unknown;
+  /** Value to write when toggle state is FALSE (default false) */
+  valueFalse?: unknown;
+  /** Toggle interval seconds while rule is true (default 1) */
+  intervalSeconds?: number;
+  /** When rule becomes false, write valueFalse once (default true) */
+  writeFalseOnStop?: boolean;
+}
+
 export interface AdvancedRuleActions {
   alert?: AdvancedRuleActionAlert;
   publish?: AdvancedRuleActionPublish;
+  modbusWrite?: AdvancedRuleActionModbusWrite;
 }
 
 export interface AdvancedRule {
