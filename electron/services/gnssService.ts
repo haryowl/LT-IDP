@@ -11,6 +11,10 @@ export type GnssConfig = {
   /** Used only to throttle history storage for system-gnss-* mappings */
   historyIntervalSeconds?: number;
   filterEnabled?: boolean;
+  /** How to compute satellite count for min-satellites filtering */
+  satelliteCountSource?: 'gga' | 'gsa';
+  /** Which constellations to count when satelliteCountSource = 'gsa' */
+  allowedConstellations?: Array<'gps' | 'glonass' | 'galileo' | 'beidou' | 'sbas' | 'qzss' | 'navic' | 'unknown'>;
   minSatellites?: number;
   minFixQuality?: number;
   maxJumpMeters?: number;
@@ -34,6 +38,21 @@ export type GnssFix = {
   bearingDegrees: number | null;
   /** Accumulated distance along accepted filtered fixes (meters); resettable */
   tripDistanceMeters: number;
+  /** Satellites used in fix, parsed from GSA when available */
+  usedSatPrns: number[] | null;
+  /** Constellation counts for satellites used in fix (from GSA) */
+  usedSatByConstellation:
+    | {
+        gps: number;
+        glonass: number;
+        galileo: number;
+        beidou: number;
+        sbas: number;
+        qzss: number;
+        navic: number;
+        unknown: number;
+      }
+    | null;
   satellites: number | null;
   fixQuality: number | null;
   lastSentenceAt: number | null;
@@ -118,6 +137,60 @@ function knotsToKmh(knots: string): number | null {
   return v * 1.852;
 }
 
+function normalizePrn(prn: number): number {
+  // Some receivers send leading zeros or weird formatting; keep numeric.
+  return Math.max(0, Math.floor(prn));
+}
+
+type Constellation = NonNullable<NonNullable<GnssConfig['allowedConstellations']>[number]>;
+
+function prnToConstellation(prn: number): Constellation {
+  // Common NMEA PRN mappings (approximate but practical):
+  // - GPS: 1–32
+  // - SBAS: 33–64 or 120–158 (varies by receiver)
+  // - GLONASS: 65–96
+  // - QZSS: 193–199
+  // - BeiDou: 201–237
+  // - Galileo: 301–336
+  // - NavIC/IRNSS: 401–414
+  if (prn >= 1 && prn <= 32) return 'gps';
+  if ((prn >= 33 && prn <= 64) || (prn >= 120 && prn <= 158)) return 'sbas';
+  if (prn >= 65 && prn <= 96) return 'glonass';
+  if (prn >= 193 && prn <= 199) return 'qzss';
+  if (prn >= 201 && prn <= 237) return 'beidou';
+  if (prn >= 301 && prn <= 336) return 'galileo';
+  if (prn >= 401 && prn <= 414) return 'navic';
+  return 'unknown';
+}
+
+function emptyConstellationCounts(): NonNullable<GnssFix['usedSatByConstellation']> {
+  return { gps: 0, glonass: 0, galileo: 0, beidou: 0, sbas: 0, qzss: 0, navic: 0, unknown: 0 };
+}
+
+function parseGsa(parts: string[]): Partial<GnssFix> | null {
+  // $GxGSA,mode1,mode2,sat1..sat12,PDOP,HDOP,VDOP
+  // Used satellites are fields 3..14 inclusive (12 PRNs); some receivers provide fewer/empty.
+  const prns: number[] = [];
+  for (let i = 3; i <= 14; i++) {
+    const raw = (parts[i] ?? '').trim();
+    if (!raw) continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) continue;
+    const prn = normalizePrn(n);
+    if (prn > 0) prns.push(prn);
+  }
+  if (!prns.length) {
+    return { usedSatPrns: [], usedSatByConstellation: emptyConstellationCounts(), lastSentenceType: 'GSA' };
+  }
+  const counts = emptyConstellationCounts();
+  for (const p of prns) {
+    const c = prnToConstellation(p);
+    counts[c] += 1;
+  }
+  prns.sort((a, b) => a - b);
+  return { usedSatPrns: prns, usedSatByConstellation: counts, lastSentenceType: 'GSA' };
+}
+
 function parseGga(parts: string[]): Partial<GnssFix> | null {
   // $GxGGA,time,lat,N,lon,E,fixQuality,numSV,HDOP,alt,M,...
   const lat = nmeaToDecimal(parts[2] ?? '', parts[3] ?? '');
@@ -167,6 +240,7 @@ function parseNmeaSentence(line: string): Partial<GnssFix> | null {
   const type = head.slice(-3).toUpperCase();
   if (type === 'GGA') return parseGga(parts);
   if (type === 'RMC') return parseRmc(parts);
+  if (type === 'GSA') return parseGsa(parts);
   return null;
 }
 
@@ -190,6 +264,8 @@ export class GnssService extends EventEmitter {
       portPath: null,
       baudRate: 9600,
       filterEnabled: true,
+      satelliteCountSource: 'gga',
+      allowedConstellations: ['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'],
       minSatellites: 4,
       minFixQuality: 1,
       maxJumpMeters: 25,
@@ -213,6 +289,8 @@ export class GnssService extends EventEmitter {
       courseDegrees: null,
       bearingDegrees: null,
       tripDistanceMeters: 0,
+      usedSatPrns: null,
+      usedSatByConstellation: null,
       satellites: null,
       fixQuality: null,
       lastSentenceAt: null,
@@ -227,6 +305,8 @@ export class GnssService extends EventEmitter {
       courseDegrees: null,
       bearingDegrees: null,
       tripDistanceMeters: 0,
+      usedSatPrns: null,
+      usedSatByConstellation: null,
       satellites: null,
       fixQuality: null,
       lastSentenceAt: null,
@@ -330,6 +410,22 @@ export class GnssService extends EventEmitter {
     return { ...f, tripDistanceMeters: this.tripMeters, bearingDegrees: this.lastBearingDegrees };
   }
 
+  private effectiveSatelliteCount(fix: GnssFix, cfg: GnssConfig): number {
+    const src = cfg.satelliteCountSource ?? 'gga';
+    if (src !== 'gsa') return (fix.satellites ?? 0) as number;
+    const counts = fix.usedSatByConstellation;
+    if (!counts) return (fix.satellites ?? 0) as number;
+    const allowed =
+      cfg.allowedConstellations && cfg.allowedConstellations.length
+        ? new Set(cfg.allowedConstellations)
+        : new Set<Constellation>(['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown']);
+    let total = 0;
+    for (const k of Object.keys(counts) as Constellation[]) {
+      if (allowed.has(k)) total += counts[k] ?? 0;
+    }
+    return total;
+  }
+
   private tryAccumulateTrip(lat: number, lon: number, cfg: GnssConfig, speedKmh: number | null): void {
     const maxJump = cfg.maxJumpMeters ?? 0;
     const minTripSpd = cfg.minTripSpeedKmh ?? 0;
@@ -370,6 +466,17 @@ export class GnssService extends EventEmitter {
           ? Math.max(1, Math.floor(next.historyIntervalSeconds))
           : this.status.config.historyIntervalSeconds,
       filterEnabled: typeof next.filterEnabled === 'boolean' ? next.filterEnabled : this.status.config.filterEnabled,
+      satelliteCountSource:
+        next.satelliteCountSource === 'gsa' || next.satelliteCountSource === 'gga'
+          ? next.satelliteCountSource
+          : (this.status.config.satelliteCountSource ?? 'gga'),
+      allowedConstellations:
+        Array.isArray(next.allowedConstellations) && next.allowedConstellations.length
+          ? (next.allowedConstellations.filter((x) =>
+              ['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'].includes(String(x))
+            ) as any)
+          : (this.status.config.allowedConstellations ??
+              (['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'] as any)),
       minSatellites: isFiniteNum(next.minSatellites) ? Math.max(0, Math.floor(next.minSatellites)) : this.status.config.minSatellites,
       minFixQuality: isFiniteNum(next.minFixQuality) ? Math.max(0, Math.floor(next.minFixQuality)) : this.status.config.minFixQuality,
       maxJumpMeters: isFiniteNum(next.maxJumpMeters) ? Math.max(0, next.maxJumpMeters) : this.status.config.maxJumpMeters,
@@ -390,6 +497,8 @@ export class GnssService extends EventEmitter {
       cfg.portPath !== this.status.config.portPath ||
       cfg.baudRate !== this.status.config.baudRate ||
       cfg.filterEnabled !== this.status.config.filterEnabled ||
+      cfg.satelliteCountSource !== this.status.config.satelliteCountSource ||
+      JSON.stringify(cfg.allowedConstellations || []) !== JSON.stringify(this.status.config.allowedConstellations || []) ||
       cfg.minSatellites !== this.status.config.minSatellites ||
       cfg.minFixQuality !== this.status.config.minFixQuality ||
       cfg.maxJumpMeters !== this.status.config.maxJumpMeters ||
@@ -559,6 +668,8 @@ export class GnssService extends EventEmitter {
         altitudeM: parsed.altitudeM ?? prevRaw.altitudeM,
         speedKmh: parsed.speedKmh ?? prevRaw.speedKmh,
         courseDegrees: parsed.courseDegrees !== undefined && parsed.courseDegrees !== null ? parsed.courseDegrees : prevRaw.courseDegrees,
+        usedSatPrns: parsed.usedSatPrns !== undefined ? (parsed.usedSatPrns as any) : prevRaw.usedSatPrns,
+        usedSatByConstellation: parsed.usedSatByConstellation !== undefined ? (parsed.usedSatByConstellation as any) : prevRaw.usedSatByConstellation,
         satellites: parsed.satellites ?? prevRaw.satellites,
         fixQuality: parsed.fixQuality ?? prevRaw.fixQuality,
         valid: typeof parsed.valid === 'boolean' ? parsed.valid : prevRaw.valid,
@@ -590,7 +701,7 @@ export class GnssService extends EventEmitter {
       return this.stampNav(raw);
     }
 
-    const satsOk = (raw.satellites ?? 0) >= (cfg.minSatellites ?? 0);
+    const satsOk = this.effectiveSatelliteCount(raw, cfg) >= (cfg.minSatellites ?? 0);
     const qualOk = (raw.fixQuality ?? 0) >= (cfg.minFixQuality ?? 0);
     const validOk = !!raw.valid;
     const coordsOk = isFiniteNum(raw.latitude) && isFiniteNum(raw.longitude);

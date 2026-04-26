@@ -9,11 +9,15 @@ import {
   CardContent,
   Chip,
   Divider,
+  FormControl,
   FormControlLabel,
   Grid,
   LinearProgress,
+  ListItemText,
   MenuItem,
   Paper,
+  Select,
+  Checkbox,
   Stack,
   Switch,
   TextField,
@@ -73,6 +77,8 @@ interface GnssConfig {
   baudRate: number;
   historyIntervalSeconds?: number;
   filterEnabled?: boolean;
+  satelliteCountSource?: 'gga' | 'gsa';
+  allowedConstellations?: Array<'gps' | 'glonass' | 'galileo' | 'beidou' | 'sbas' | 'qzss' | 'navic' | 'unknown'>;
   minSatellites?: number;
   minFixQuality?: number;
   maxJumpMeters?: number;
@@ -100,6 +106,8 @@ interface GnssStatus {
     courseDegrees?: number | null;
     bearingDegrees?: number | null;
     tripDistanceMeters?: number;
+    usedSatPrns?: number[] | null;
+    usedSatByConstellation?: Record<string, number> | null;
     satellites: number | null;
     fixQuality: number | null;
     lastSentenceAt: number | null;
@@ -114,6 +122,8 @@ interface GnssStatus {
     courseDegrees?: number | null;
     bearingDegrees?: number | null;
     tripDistanceMeters?: number;
+    usedSatPrns?: number[] | null;
+    usedSatByConstellation?: Record<string, number> | null;
     satellites: number | null;
     fixQuality: number | null;
     lastSentenceAt: number | null;
@@ -1696,6 +1706,51 @@ const Settings: React.FC = () => {
                 label="Enable GNSS filtering"
               />
               <Grid container spacing={1.5}>
+                <Grid item xs={12}>
+                  <FormControl fullWidth size="small">
+                    <Select
+                      value={gnssConfig.satelliteCountSource ?? 'gga'}
+                      onChange={(e) => setGnssConfig((p) => ({ ...p, satelliteCountSource: e.target.value as any }))}
+                    >
+                      <MenuItem value="gga">Satellite count source: GGA (receiver reported)</MenuItem>
+                      <MenuItem value="gsa">Satellite count source: GSA (used satellites by constellation)</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    Used for the “Min satellites” filter. GSA requires the receiver to output GSA sentences.
+                  </Typography>
+                </Grid>
+                <Grid item xs={12}>
+                  <FormControl fullWidth size="small">
+                    <Select
+                      multiple
+                      value={
+                        (gnssConfig.allowedConstellations as any) ?? [
+                          'gps',
+                          'glonass',
+                          'galileo',
+                          'beidou',
+                          'sbas',
+                          'qzss',
+                          'navic',
+                          'unknown',
+                        ]
+                      }
+                      onChange={(e) => setGnssConfig((p) => ({ ...p, allowedConstellations: e.target.value as any }))}
+                      renderValue={(selected) => (Array.isArray(selected) ? selected.join(', ') : String(selected))}
+                    >
+                      {(['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'] as const).map((id) => (
+                        <MenuItem key={id} value={id}>
+                          <Checkbox checked={((gnssConfig.allowedConstellations as any) ?? []).includes(id)} />
+                          <ListItemText primary={id.toUpperCase()} />
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    Only affects GSA-based counting (which constellations contribute to “Min satellites”).
+                  </Typography>
+                </Grid>
                 <Grid item xs={6}>
                   <TextField
                     label="Min satellites"
@@ -1832,6 +1887,15 @@ const Settings: React.FC = () => {
                         <strong>{fmtDeg(fix?.bearingDegrees)}</strong> · Trip distance:{' '}
                         <strong>{fmtTripM(fix?.tripDistanceMeters)}</strong>
                       </Typography>
+                      {fix?.usedSatByConstellation && (
+                        <Typography variant="caption" color="text.secondary">
+                          Used sats:{' '}
+                          {Object.entries(fix.usedSatByConstellation)
+                            .filter(([, v]) => typeof v === 'number' && v > 0)
+                            .map(([k, v]) => `${k.toUpperCase()}:${v}`)
+                            .join(' · ') || '—'}
+                        </Typography>
+                      )}
                       <Typography variant="caption" color="text.secondary">
                         Last update:{' '}
                         {fix?.lastSentenceAt ? new Date(fix.lastSentenceAt).toLocaleString() : '—'}

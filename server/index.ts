@@ -535,6 +535,8 @@ function getGnssConfig(): GnssConfig {
   const histRaw = (dbService.getSystemConfig('gnss:historyIntervalSeconds') || '').trim();
   const hist = Number(histRaw);
   const filterEnabled = (dbService.getSystemConfig('gnss:filterEnabled') || '').trim();
+  const satCountSourceRaw = (dbService.getSystemConfig('gnss:satelliteCountSource') || '').trim();
+  const allowedConstRaw = (dbService.getSystemConfig('gnss:allowedConstellations') || '').trim();
   const minSatRaw = (dbService.getSystemConfig('gnss:minSatellites') || '').trim();
   const minFixRaw = (dbService.getSystemConfig('gnss:minFixQuality') || '').trim();
   const maxJumpRaw = (dbService.getSystemConfig('gnss:maxJumpMeters') || '').trim();
@@ -543,12 +545,26 @@ function getGnssConfig(): GnssConfig {
   const holdRaw = (dbService.getSystemConfig('gnss:holdLastGoodSeconds') || '').trim();
   const smoothRaw = (dbService.getSystemConfig('gnss:smoothingWindow') || '').trim();
   const minUpdRaw = (dbService.getSystemConfig('gnss:minUpdateIntervalMs') || '').trim();
+  const defaultAllowed = ['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'] as const;
   return {
     enabled,
     portPath: portPathRaw || null,
     baudRate: Number.isFinite(baud) ? Math.floor(baud) : 9600,
     historyIntervalSeconds: Number.isFinite(hist) ? Math.max(1, Math.floor(hist)) : 5,
     filterEnabled: filterEnabled ? filterEnabled === '1' : true,
+    satelliteCountSource: satCountSourceRaw === 'gsa' ? 'gsa' : 'gga',
+    allowedConstellations: (() => {
+      try {
+        const arr = JSON.parse(allowedConstRaw || '[]');
+        if (!Array.isArray(arr) || !arr.length) return [...defaultAllowed];
+        const allowed = arr
+          .map((x: any) => String(x))
+          .filter((x: string) => (defaultAllowed as readonly string[]).includes(x)) as any;
+        return allowed.length ? allowed : [...defaultAllowed];
+      } catch {
+        return [...defaultAllowed];
+      }
+    })(),
     minSatellites: Number.isFinite(Number(minSatRaw)) ? Math.max(0, Math.floor(Number(minSatRaw))) : 4,
     minFixQuality: Number.isFinite(Number(minFixRaw)) ? Math.max(0, Math.floor(Number(minFixRaw))) : 1,
     maxJumpMeters: Number.isFinite(Number(maxJumpRaw)) ? Math.max(0, Number(maxJumpRaw)) : 25,
@@ -571,6 +587,16 @@ function setGnssConfig(next: Partial<GnssConfig>) {
         ? Math.max(1, Math.floor((next as any).historyIntervalSeconds))
         : (curr as any).historyIntervalSeconds ?? 5,
     filterEnabled: typeof (next as any).filterEnabled === 'boolean' ? (next as any).filterEnabled : curr.filterEnabled,
+    satelliteCountSource:
+      (next as any).satelliteCountSource === 'gsa' || (next as any).satelliteCountSource === 'gga'
+        ? (next as any).satelliteCountSource
+        : (curr as any).satelliteCountSource ?? 'gga',
+    allowedConstellations:
+      Array.isArray((next as any).allowedConstellations) && (next as any).allowedConstellations.length
+        ? (next as any).allowedConstellations
+            .map((x: any) => String(x))
+            .filter((x: string) => ['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'].includes(x))
+        : (curr as any).allowedConstellations ?? ['gps', 'glonass', 'galileo', 'beidou', 'sbas', 'qzss', 'navic', 'unknown'],
     minSatellites:
       typeof (next as any).minSatellites === 'number' ? Math.max(0, Math.floor((next as any).minSatellites)) : curr.minSatellites,
     minFixQuality:
@@ -601,6 +627,8 @@ function setGnssConfig(next: Partial<GnssConfig>) {
   dbService.setSystemConfig('gnss:baudRate', String(merged.baudRate || 9600));
   dbService.setSystemConfig('gnss:historyIntervalSeconds', String(merged.historyIntervalSeconds || 5));
   dbService.setSystemConfig('gnss:filterEnabled', merged.filterEnabled ? '1' : '0');
+  dbService.setSystemConfig('gnss:satelliteCountSource', String((merged as any).satelliteCountSource || 'gga'));
+  dbService.setSystemConfig('gnss:allowedConstellations', JSON.stringify((merged as any).allowedConstellations || []));
   dbService.setSystemConfig('gnss:minSatellites', String(merged.minSatellites ?? 4));
   dbService.setSystemConfig('gnss:minFixQuality', String(merged.minFixQuality ?? 1));
   dbService.setSystemConfig('gnss:maxJumpMeters', String(merged.maxJumpMeters ?? 25));
