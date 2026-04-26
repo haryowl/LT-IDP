@@ -23,12 +23,14 @@ import { AdvancedRulesService } from '../electron/services/advancedRulesService'
 import { getLogger } from '../electron/services/logger';
 import { getSystemInfo } from '../electron/services/systemInfo';
 import { GnssService, type GnssConfig } from '../electron/services/gnssService';
+import { runScheduledDataRetention } from '../electron/services/dataRetentionScheduler';
 import { SerialPort } from 'serialport';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const DAY_MS = 86_400_000;
 
 const execFileAsync = promisify(execFile);
 
@@ -403,6 +405,11 @@ function sparingRoleMiddleware(req: express.Request, res: express.Response, next
   next();
 }
 
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if ((req as any).user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  next();
+}
+
 // ---------- Auth ----------
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -748,6 +755,100 @@ app.post('/api/data/realtime/subscribe', authMiddleware, (req, res) => {
   const mappingIds = req.body?.mappingIds || [];
   realtimeSubscribers.add(mappingIds);
   res.json({ ok: true });
+});
+
+app.get('/api/data/storage-summary', authMiddleware, (_req, res) => {
+  try {
+    const dbPart = dbService.getDataStorageSummary();
+    const logs = logger.getLogsStorageSummary();
+    res.json({ ...dbPart, logs });
+  } catch (e: any) {
+    res.status(500).json({ error: errMsg(e) });
+  }
+});
+
+app.get('/api/data/cleanup-settings', authMiddleware, (req, res) => {
+  const lastRaw = dbService.getSystemConfig('data:lastRetentionRunAt');
+  const lastN = lastRaw ? parseInt(lastRaw, 10) : 0;
+  res.json({
+    retentionDays: parseInt(dbService.getSystemConfig('data:retentionDays') || '0', 10),
+    exportRetentionDays: parseInt(dbService.getSystemConfig('data:exportRetentionDays') || '30', 10),
+    lowDiskAutoPurge: (dbService.getSystemConfig('data:lowDiskAutoPurge') || '1') === '1',
+    lowDiskFreePctThreshold: parseFloat(dbService.getSystemConfig('data:lowDiskFreePctThreshold') || '5'),
+    lowDiskEmergencyKeepDays: parseInt(dbService.getSystemConfig('data:lowDiskEmergencyKeepDays') || '14', 10),
+    lastRetentionRunAt: Number.isFinite(lastN) && lastN > 0 ? lastN : null,
+  });
+});
+
+app.put('/api/data/cleanup-settings', authMiddleware, requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (b.retentionDays !== undefined) {
+    const n = Number(b.retentionDays);
+    if (!Number.isFinite(n) || n < 0 || n > 36500) return res.status(400).json({ error: 'Invalid retentionDays' });
+    dbService.setSystemConfig('data:retentionDays', String(Math.floor(n)));
+  }
+  if (b.exportRetentionDays !== undefined) {
+    const n = Number(b.exportRetentionDays);
+    if (!Number.isFinite(n) || n < 0 || n > 3650) return res.status(400).json({ error: 'Invalid exportRetentionDays' });
+    dbService.setSystemConfig('data:exportRetentionDays', String(Math.floor(n)));
+  }
+  if (b.lowDiskAutoPurge !== undefined) {
+    dbService.setSystemConfig('data:lowDiskAutoPurge', b.lowDiskAutoPurge ? '1' : '0');
+  }
+  if (b.lowDiskFreePctThreshold !== undefined) {
+    const n = Number(b.lowDiskFreePctThreshold);
+    if (!Number.isFinite(n) || n < 0 || n > 100) return res.status(400).json({ error: 'Invalid lowDiskFreePctThreshold' });
+    dbService.setSystemConfig('data:lowDiskFreePctThreshold', String(n));
+  }
+  if (b.lowDiskEmergencyKeepDays !== undefined) {
+    const n = Number(b.lowDiskEmergencyKeepDays);
+    if (!Number.isFinite(n) || n < 1 || n > 3650) return res.status(400).json({ error: 'Invalid lowDiskEmergencyKeepDays' });
+    dbService.setSystemConfig('data:lowDiskEmergencyKeepDays', String(Math.floor(n)));
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/data/prune-historical', authMiddleware, requireAdmin, (req, res) => {
+  const { beforeTimestamp, mappingIds } = req.body || {};
+  const ts = Number(beforeTimestamp);
+  if (!Number.isFinite(ts)) return res.status(400).json({ error: 'beforeTimestamp required' });
+  const ids = Array.isArray(mappingIds) ? (mappingIds as unknown[]).filter((x) => typeof x === 'string') as string[] : undefined;
+  const r = dbService.pruneHistoricalDataBeforeTimestamp(ts, ids?.length ? ids : undefined);
+  res.json(r);
+});
+
+app.post('/api/data/vacuum', authMiddleware, requireAdmin, (_req, res) => {
+  try {
+    dbService.vacuumDatabase();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: errMsg(e) });
+  }
+});
+
+app.post('/api/data/prune-exports', authMiddleware, requireAdmin, (req, res) => {
+  const days = Number((req.body || {}).olderThanDays);
+  if (!Number.isFinite(days) || days < 1) return res.status(400).json({ error: 'olderThanDays (>=1) required' });
+  const cutoff = Date.now() - Math.floor(days) * DAY_MS;
+  const r = dbService.pruneExportFilesOlderThan(cutoff);
+  res.json(r);
+});
+
+app.post('/api/data/prune-logs', authMiddleware, requireAdmin, (req, res) => {
+  const days = Number((req.body || {}).olderThanDays);
+  if (!Number.isFinite(days) || days < 1) return res.status(400).json({ error: 'olderThanDays (>=1) required' });
+  const cutoff = Date.now() - Math.floor(days) * DAY_MS;
+  const r = logger.deleteRotatedLogFilesOlderThan(cutoff);
+  res.json(r);
+});
+
+app.post('/api/data/retention-run', authMiddleware, requireAdmin, (_req, res) => {
+  try {
+    runScheduledDataRetention(dbService);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: errMsg(e) });
+  }
 });
 
 // ---------- Publishers ----------
@@ -1250,6 +1351,9 @@ server.on('upgrade', (req, socket, head) => {
   if (brokerConfig?.autoStart) {
     try { await mqttBrokerService.start(brokerConfig); } catch (e: any) { logger.error('Auto-start broker', e?.message); }
   }
+
+  runScheduledDataRetention(dbService);
+  setInterval(() => runScheduledDataRetention(dbService), 6 * 60 * 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     logger.info(`LT-IDP web server listening on http://0.0.0.0:${PORT}`);

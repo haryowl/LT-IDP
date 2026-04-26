@@ -177,6 +177,29 @@ export const api = {
   data: {
     query: (params: any) => (isElectron ? (window as any).electronAPI.data.query(params) : request('POST', '/data/query', params)),
     export: (params: any) => (isElectron ? (window as any).electronAPI.data.export(params) : request('POST', '/data/export', params)),
+    storageSummary: () =>
+      isElectron ? (window as any).electronAPI.data.storageSummary() : request('GET', '/data/storage-summary'),
+    cleanupSettingsGet: () =>
+      isElectron ? (window as any).electronAPI.data.cleanupSettingsGet() : request('GET', '/data/cleanup-settings'),
+    cleanupSettingsPut: (body: any) =>
+      isElectron
+        ? (window as any).electronAPI.data.cleanupSettingsPut(body)
+        : request('PUT', '/data/cleanup-settings', body),
+    pruneHistorical: (body: { beforeTimestamp: number; mappingIds?: string[] }) =>
+      isElectron
+        ? (window as any).electronAPI.data.pruneHistorical(body)
+        : request('POST', '/data/prune-historical', body),
+    vacuum: () => (isElectron ? (window as any).electronAPI.data.vacuum() : request('POST', '/data/vacuum', {})),
+    pruneExports: (olderThanDays: number) =>
+      isElectron
+        ? (window as any).electronAPI.data.pruneExports(olderThanDays)
+        : request('POST', '/data/prune-exports', { olderThanDays }),
+    pruneLogs: (olderThanDays: number) =>
+      isElectron
+        ? (window as any).electronAPI.data.pruneLogs(olderThanDays)
+        : request('POST', '/data/prune-logs', { olderThanDays }),
+    retentionRun: () =>
+      isElectron ? (window as any).electronAPI.data.retentionRun() : request('POST', '/data/retention-run', {}),
     subscribeRealtime: (mappingIds: string[]) => (isElectron ? (window as any).electronAPI.data.subscribeRealtime(mappingIds) : request('POST', '/data/realtime/subscribe', { mappingIds })),
     onRealtimeData: (callback: (data: any) => void) => {
       if (isElectron) return (window as any).electronAPI.on('data:realtime', (_: any, data: any) => callback(data));

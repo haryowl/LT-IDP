@@ -20,6 +20,28 @@ import type {
   RealtimeData,
 } from '../types';
 
+/** Disk space for the volume holding the database (Node fs.statfsSync when available). */
+export type DataStorageDiskInfo = {
+  path: string;
+  freeBytes: number;
+  totalBytes: number;
+  freePercent: number;
+};
+
+export type DataStorageSummary = {
+  dbPath: string;
+  dbMainBytes: number;
+  dbWalBytes: number;
+  dbShmBytes: number;
+  historicalRowCount: number;
+  historicalOldestTimestamp: number | null;
+  historicalNewestTimestamp: number | null;
+  exportDir: string;
+  exportTotalBytes: number;
+  exportFileCount: number;
+  disk: DataStorageDiskInfo | null;
+};
+
 export class DatabaseService {
   private db: Database.Database;
   private dbPath: string;
@@ -1743,6 +1765,117 @@ export class DatabaseService {
     }
 
     return { path: exportPath };
+  }
+
+  private fileSizeIfExists(filePath: string): number {
+    try {
+      return fs.statSync(filePath).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Sizes, row counts, and optional host disk usage for the data volume. */
+  getDataStorageSummary(): DataStorageSummary {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) as c, MIN(timestamp) as mn, MAX(timestamp) as mx FROM historical_data`)
+      .get() as { c: number; mn: number | null; mx: number | null };
+
+    let exportTotalBytes = 0;
+    let exportFileCount = 0;
+    if (fs.existsSync(this.exportDir)) {
+      for (const name of fs.readdirSync(this.exportDir)) {
+        if (!name.startsWith('export_')) continue;
+        try {
+          const st = fs.statSync(path.join(this.exportDir, name));
+          exportTotalBytes += st.size;
+          exportFileCount++;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    const diskPath = path.dirname(this.dbPath);
+    let disk: DataStorageDiskInfo | null = null;
+    try {
+      const statfsSync = (fs as any).statfsSync as ((p: string) => { bfree: number; bsize: number; blocks: number }) | undefined;
+      if (typeof statfsSync === 'function') {
+        const s = statfsSync(diskPath);
+        const bsize = Number(s.bsize);
+        const freeBytes = Number(s.bfree) * bsize;
+        const totalBytes = Number(s.blocks) * bsize;
+        if (Number.isFinite(freeBytes) && Number.isFinite(totalBytes) && totalBytes > 0) {
+          disk = {
+            path: diskPath,
+            freeBytes,
+            totalBytes,
+            freePercent: (freeBytes / totalBytes) * 100,
+          };
+        }
+      }
+    } catch {
+      disk = null;
+    }
+
+    return {
+      dbPath: this.dbPath,
+      dbMainBytes: this.fileSizeIfExists(this.dbPath),
+      dbWalBytes: this.fileSizeIfExists(`${this.dbPath}-wal`),
+      dbShmBytes: this.fileSizeIfExists(`${this.dbPath}-shm`),
+      historicalRowCount: row?.c ?? 0,
+      historicalOldestTimestamp: row?.mn ?? null,
+      historicalNewestTimestamp: row?.mx ?? null,
+      exportDir: this.exportDir,
+      exportTotalBytes,
+      exportFileCount,
+      disk,
+    };
+  }
+
+  /**
+   * Delete historical rows with timestamp strictly before cutoffMs.
+   * When mappingIds is non-empty, only those mappings are affected.
+   */
+  pruneHistoricalDataBeforeTimestamp(cutoffMs: number, mappingIds?: string[]): { deleted: number } {
+    if (mappingIds && mappingIds.length > 0) {
+      const ph = mappingIds.map(() => '?').join(',');
+      const info = this.db
+        .prepare(`DELETE FROM historical_data WHERE timestamp < ? AND mapping_id IN (${ph})`)
+        .run(cutoffMs, ...mappingIds);
+      return { deleted: Number(info.changes) };
+    }
+    const info = this.db.prepare(`DELETE FROM historical_data WHERE timestamp < ?`).run(cutoffMs);
+    return { deleted: Number(info.changes) };
+  }
+
+  /** Reclaim SQLite file space after large deletes (exclusive; can be slow). */
+  vacuumDatabase(): void {
+    this.db.exec('VACUUM');
+  }
+
+  /** Remove CSV/JSON exports in exportDir older than cutoffMs (by mtime). */
+  pruneExportFilesOlderThan(cutoffMs: number): { deletedFiles: number; freedBytes: number } {
+    if (!fs.existsSync(this.exportDir)) {
+      return { deletedFiles: 0, freedBytes: 0 };
+    }
+    let deletedFiles = 0;
+    let freedBytes = 0;
+    for (const name of fs.readdirSync(this.exportDir)) {
+      if (!name.startsWith('export_')) continue;
+      const fp = path.join(this.exportDir, name);
+      try {
+        const st = fs.statSync(fp);
+        if (st.mtimeMs < cutoffMs) {
+          freedBytes += st.size;
+          fs.unlinkSync(fp);
+          deletedFiles++;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return { deletedFiles, freedBytes };
   }
 
   /** Pending SPARING retry queue rows (matches SparingService.getQueueDepth). */

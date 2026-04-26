@@ -80,6 +80,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     export: (params: any) => ipcRenderer.invoke('data:export', params),
     subscribeRealtime: (mappingIds: string[]) =>
       ipcRenderer.invoke('data:realtime:subscribe', mappingIds),
+    storageSummary: () => ipcRenderer.invoke('data:storageSummary'),
+    cleanupSettingsGet: () => ipcRenderer.invoke('data:cleanupSettings:get'),
+    cleanupSettingsPut: (body: any) => ipcRenderer.invoke('data:cleanupSettings:put', body),
+    pruneHistorical: (body: any) => ipcRenderer.invoke('data:pruneHistorical', body),
+    vacuum: () => ipcRenderer.invoke('data:vacuum'),
+    pruneExports: (olderThanDays: number) => ipcRenderer.invoke('data:pruneExports', { olderThanDays }),
+    pruneLogs: (olderThanDays: number) => ipcRenderer.invoke('data:pruneLogs', { olderThanDays }),
+    retentionRun: () => ipcRenderer.invoke('data:retentionRun'),
     onRealtimeData: (callback: (data: any) => void) => {
       ipcRenderer.on('data:realtime', (_event, data) => callback(data));
     },

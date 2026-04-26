@@ -63,6 +63,14 @@ export interface ElectronAPI {
   data: {
     query: (params: any) => Promise<any>;
     export: (params: any) => Promise<any>;
+    storageSummary: () => Promise<any>;
+    cleanupSettingsGet: () => Promise<any>;
+    cleanupSettingsPut: (body: any) => Promise<{ ok: boolean }>;
+    pruneHistorical: (body: { beforeTimestamp: number; mappingIds?: string[] }) => Promise<{ deleted: number }>;
+    vacuum: () => Promise<{ ok: boolean }>;
+    pruneExports: (olderThanDays: number) => Promise<{ deletedFiles: number; freedBytes: number }>;
+    pruneLogs: (olderThanDays: number) => Promise<{ deletedFiles: number; freedBytes: number }>;
+    retentionRun: () => Promise<{ ok: boolean }>;
     subscribeRealtime: (mappingIds: string[]) => Promise<any>;
     onRealtimeData: (callback: (data: any) => void) => void;
   };

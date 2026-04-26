@@ -163,6 +163,76 @@ export class Logger {
     return path.join(this.logDir, `sparing-${d}.jsonl`);
   }
 
+  /** Total size and file count for rotated app and SPARING logs in the log directory. */
+  getLogsStorageSummary(): { directory: string; totalBytes: number; fileCount: number } {
+    let totalBytes = 0;
+    let fileCount = 0;
+    if (!fs.existsSync(this.logDir)) {
+      return { directory: this.logDir, totalBytes: 0, fileCount: 0 };
+    }
+    const appRe = /^app-\d{4}-\d{2}-\d{2}\.log$/;
+    const sparingRe = /^sparing-\d{4}-\d{2}-\d{2}\.jsonl$/;
+    for (const name of fs.readdirSync(this.logDir)) {
+      if (!appRe.test(name) && !sparingRe.test(name)) continue;
+      try {
+        const st = fs.statSync(path.join(this.logDir, name));
+        totalBytes += st.size;
+        fileCount++;
+      } catch {
+        // ignore
+      }
+    }
+    return { directory: this.logDir, totalBytes, fileCount };
+  }
+
+  /**
+   * Delete rotated log files strictly older than cutoffMs (mtime), except the
+   * active app log and active SPARING log streams (by resolved path).
+   */
+  deleteRotatedLogFilesOlderThan(cutoffMs: number): { deletedFiles: number; freedBytes: number } {
+    const skip = new Set<string>();
+    try {
+      skip.add(fs.realpathSync(this.currentLogFile));
+    } catch {
+      skip.add(this.currentLogFile);
+    }
+    if (this.sparingLogFile) {
+      try {
+        skip.add(fs.realpathSync(this.sparingLogFile));
+      } catch {
+        skip.add(this.sparingLogFile);
+      }
+    }
+    let deletedFiles = 0;
+    let freedBytes = 0;
+    if (!fs.existsSync(this.logDir)) {
+      return { deletedFiles: 0, freedBytes: 0 };
+    }
+    const appRe = /^app-\d{4}-\d{2}-\d{2}\.log$/;
+    const sparingRe = /^sparing-\d{4}-\d{2}-\d{2}\.jsonl$/;
+    for (const name of fs.readdirSync(this.logDir)) {
+      if (!appRe.test(name) && !sparingRe.test(name)) continue;
+      const fp = path.join(this.logDir, name);
+      let resolved = fp;
+      try {
+        resolved = fs.realpathSync(fp);
+      } catch {
+        // use fp
+      }
+      if (skip.has(resolved) || skip.has(fp)) continue;
+      try {
+        const st = fs.statSync(fp);
+        if (st.mtimeMs >= cutoffMs) continue;
+        freedBytes += st.size;
+        fs.unlinkSync(fp);
+        deletedFiles++;
+      } catch {
+        // ignore
+      }
+    }
+    return { deletedFiles, freedBytes };
+  }
+
   /** Read SPARING log file(s) for export. Returns { path, content, filename } for the given date or all sparing-*.jsonl in logDir. */
   readSparingLogForExport(date?: string): { path: string; content: string; filename: string } | { path: string; content: string; filename: string }[] {
     const dir = this.logDir;

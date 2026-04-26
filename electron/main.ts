@@ -15,6 +15,7 @@ import { ThresholdPublishService } from './services/thresholdPublish';
 import { getSystemInfo } from './services/systemInfo';
 import { setupConsoleLogging, getLogger } from './services/logger';
 import { getStoredSession, setStoredSession, clearStoredSession } from './services/sessionStore';
+import { runScheduledDataRetention } from './services/dataRetentionScheduler';
 
 // Initialize logger early to capture all logs
 setupConsoleLogging();
@@ -132,6 +133,9 @@ async function initializeServices() {
       logger.error('Email schedule tick failed:', e?.message);
     }
   }, 60 * 1000);
+
+  runScheduledDataRetention(dbService);
+  setInterval(() => runScheduledDataRetention(dbService), 6 * 60 * 60 * 1000);
 
   // Wire up data flow
   modbusService.on('data', (data: any) => {
@@ -518,6 +522,86 @@ function setupIpcHandlers() {
         mainWindow?.webContents.send('data:realtime', data);
       }
     });
+  });
+
+  ipcMain.handle('data:storageSummary', async () => {
+    const dbPart = dbService.getDataStorageSummary();
+    const logs = logger.getLogsStorageSummary();
+    return { ...dbPart, logs };
+  });
+
+  ipcMain.handle('data:cleanupSettings:get', async () => {
+    const lastRaw = dbService.getSystemConfig('data:lastRetentionRunAt');
+    const lastN = lastRaw ? parseInt(lastRaw, 10) : 0;
+    return {
+      retentionDays: parseInt(dbService.getSystemConfig('data:retentionDays') || '0', 10),
+      exportRetentionDays: parseInt(dbService.getSystemConfig('data:exportRetentionDays') || '30', 10),
+      lowDiskAutoPurge: (dbService.getSystemConfig('data:lowDiskAutoPurge') || '1') === '1',
+      lowDiskFreePctThreshold: parseFloat(dbService.getSystemConfig('data:lowDiskFreePctThreshold') || '5'),
+      lowDiskEmergencyKeepDays: parseInt(dbService.getSystemConfig('data:lowDiskEmergencyKeepDays') || '14', 10),
+      lastRetentionRunAt: Number.isFinite(lastN) && lastN > 0 ? lastN : null,
+    };
+  });
+
+  ipcMain.handle('data:cleanupSettings:put', async (_, body: any) => {
+    const b = body || {};
+    if (b.retentionDays !== undefined) {
+      const n = Number(b.retentionDays);
+      if (!Number.isFinite(n) || n < 0 || n > 36500) throw new Error('Invalid retentionDays');
+      dbService.setSystemConfig('data:retentionDays', String(Math.floor(n)));
+    }
+    if (b.exportRetentionDays !== undefined) {
+      const n = Number(b.exportRetentionDays);
+      if (!Number.isFinite(n) || n < 0 || n > 3650) throw new Error('Invalid exportRetentionDays');
+      dbService.setSystemConfig('data:exportRetentionDays', String(Math.floor(n)));
+    }
+    if (b.lowDiskAutoPurge !== undefined) {
+      dbService.setSystemConfig('data:lowDiskAutoPurge', b.lowDiskAutoPurge ? '1' : '0');
+    }
+    if (b.lowDiskFreePctThreshold !== undefined) {
+      const n = Number(b.lowDiskFreePctThreshold);
+      if (!Number.isFinite(n) || n < 0 || n > 100) throw new Error('Invalid lowDiskFreePctThreshold');
+      dbService.setSystemConfig('data:lowDiskFreePctThreshold', String(n));
+    }
+    if (b.lowDiskEmergencyKeepDays !== undefined) {
+      const n = Number(b.lowDiskEmergencyKeepDays);
+      if (!Number.isFinite(n) || n < 1 || n > 3650) throw new Error('Invalid lowDiskEmergencyKeepDays');
+      dbService.setSystemConfig('data:lowDiskEmergencyKeepDays', String(Math.floor(n)));
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle('data:pruneHistorical', async (_, body: { beforeTimestamp: number; mappingIds?: string[] }) => {
+    const ts = Number(body?.beforeTimestamp);
+    if (!Number.isFinite(ts)) throw new Error('beforeTimestamp required');
+    const ids = Array.isArray(body?.mappingIds)
+      ? (body.mappingIds as unknown[]).filter((x) => typeof x === 'string') as string[]
+      : undefined;
+    return dbService.pruneHistoricalDataBeforeTimestamp(ts, ids?.length ? ids : undefined);
+  });
+
+  ipcMain.handle('data:vacuum', async () => {
+    dbService.vacuumDatabase();
+    return { ok: true };
+  });
+
+  ipcMain.handle('data:pruneExports', async (_, { olderThanDays }: { olderThanDays: number }) => {
+    const days = Number(olderThanDays);
+    if (!Number.isFinite(days) || days < 1) throw new Error('olderThanDays (>=1) required');
+    const cutoff = Date.now() - Math.floor(days) * 86_400_000;
+    return dbService.pruneExportFilesOlderThan(cutoff);
+  });
+
+  ipcMain.handle('data:pruneLogs', async (_, { olderThanDays }: { olderThanDays: number }) => {
+    const days = Number(olderThanDays);
+    if (!Number.isFinite(days) || days < 1) throw new Error('olderThanDays (>=1) required');
+    const cutoff = Date.now() - Math.floor(days) * 86_400_000;
+    return logger.deleteRotatedLogFilesOlderThan(cutoff);
+  });
+
+  ipcMain.handle('data:retentionRun', async () => {
+    runScheduledDataRetention(dbService);
+    return { ok: true };
   });
 
   // Publisher Configuration
