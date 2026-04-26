@@ -4,6 +4,7 @@ import type { ParameterMapping, RealtimeData } from '../types';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry, SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
 import type { GnssService } from './gnssService';
+import { getCpuTemperatureC } from './systemInfo';
 
 export class DataMapperService extends EventEmitter {
   private mappings: Map<string, ParameterMapping> = new Map();
@@ -446,6 +447,9 @@ export class DataMapperService extends EventEmitter {
         value = tel.getHttpSuccess();
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.HTTP_FAIL) {
         value = tel.getHttpFail();
+      } else if (sourceId === 'system-cpu-temp-c') {
+        const t = await getCpuTemperatureC();
+        value = t.valueC;
       } else if (sourceId.startsWith('system-gnss-')) {
         const fix = this.gnss?.getLatestFix?.();
         if (!fix) {

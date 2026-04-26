@@ -18,6 +18,10 @@ export interface SystemInfo {
   /** 1 / 5 / 15 minute load (Unix); null on Windows */
   loadAverage: [number, number, number] | null;
   cpuCount: number;
+  /** CPU / SoC temperature in Celsius when available */
+  cpuTemperatureC: number | null;
+  /** Source used for `cpuTemperatureC` (Linux sysfs preferred) */
+  cpuTemperatureSource: string | null;
   memory: {
     totalBytes: number;
     freeBytes: number;
@@ -471,6 +475,42 @@ function num(v: bigint | number): number {
   return typeof v === 'bigint' ? Number(v) : v;
 }
 
+export async function getCpuTemperatureC(): Promise<{ valueC: number | null; source: string | null }> {
+  if (process.platform !== 'linux') return { valueC: null, source: null };
+
+  // Priority: Linux thermal sysfs (works on most SBCs / x86).
+  try {
+    const base = '/sys/class/thermal';
+    const entries = await fs.readdir(base).catch(() => []);
+    const zones = entries.filter((e) => e.startsWith('thermal_zone'));
+    type Candidate = { type: string | null; tempC: number; zone: string };
+    const candidates: Candidate[] = [];
+
+    for (const z of zones) {
+      const zp = path.join(base, z);
+      const [typeRaw, tempRaw] = await Promise.all([
+        fs.readFile(path.join(zp, 'type'), 'utf8').catch(() => ''),
+        fs.readFile(path.join(zp, 'temp'), 'utf8').catch(() => ''),
+      ]);
+      const tempNum = Number(String(tempRaw).trim());
+      if (!Number.isFinite(tempNum)) continue;
+      const tempC = tempNum > 1000 ? tempNum / 1000 : tempNum;
+      if (!Number.isFinite(tempC)) continue;
+      const type = String(typeRaw).trim() || null;
+      candidates.push({ type, tempC, zone: z });
+    }
+
+    if (candidates.length) {
+      const preferred = candidates.find((c) => /cpu|x86_pkg_temp|package|soc/i.test(c.type || '')) ?? candidates[0]!;
+      return { valueC: preferred.tempC, source: `linux:sysfs:${preferred.zone}${preferred.type ? `:${preferred.type}` : ''}` };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { valueC: null, source: null };
+}
+
 /**
  * Collects OS, CPU, memory, and disk usage for the filesystem that contains `dataPath`.
  */
@@ -522,6 +562,7 @@ export async function getSystemInfo(dataPath: string): Promise<SystemInfo> {
   const baseNet = buildNetworkInfo();
   const wifi = await collectWifiAdapters(baseNet.interfaces);
   const network: SystemInfo['network'] = { ...baseNet, wifi };
+  const temp = await getCpuTemperatureC();
 
   return {
     hostname: os.hostname(),
@@ -534,6 +575,8 @@ export async function getSystemInfo(dataPath: string): Promise<SystemInfo> {
     systemUptimeSeconds: Math.floor(os.uptime()),
     loadAverage,
     cpuCount: os.cpus().length,
+    cpuTemperatureC: temp.valueC,
+    cpuTemperatureSource: temp.source,
     memory: {
       totalBytes: totalMem,
       freeBytes: freeMem,

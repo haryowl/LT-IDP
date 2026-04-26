@@ -132,6 +132,8 @@ interface SystemInfo {
   systemUptimeSeconds: number;
   loadAverage: [number, number, number] | null;
   cpuCount: number;
+  cpuTemperatureC?: number | null;
+  cpuTemperatureSource?: string | null;
   memory: { totalBytes: number; freeBytes: number; usedBytes: number; usedPercent: number };
   disk: {
     path: string;
@@ -465,6 +467,10 @@ function SystemHealthSection({
                           </Typography>
                           <Typography variant="body2" sx={{ fontWeight: 600 }}>
                             {systemInfo.cpuCount} logical cores
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            Temp: {systemInfo.cpuTemperatureC != null ? `${systemInfo.cpuTemperatureC.toFixed(1)} °C` : '—'}
+                            {systemInfo.cpuTemperatureSource ? ` · ${systemInfo.cpuTemperatureSource}` : ''}
                           </Typography>
                           {systemInfo.loadAverage ? (
                             <Stack direction="row" spacing={0.75} flexWrap="wrap" sx={{ mt: 0.75 }}>

@@ -160,6 +160,11 @@ const ParameterMappings: React.FC = () => {
         description: 'Same ID as in Settings; use Data type “string”.',
       },
       {
+        id: 'system-cpu-temp-c',
+        label: 'Device temperature — CPU (°C)',
+        description: 'CPU/SoC temperature in Celsius when available (Linux sysfs preferred). Data type: number.',
+      },
+      {
         id: 'system-sparing-success-count',
         label: 'SPARING — success send count',
         description: 'Total successful SPARING API sends since app start. Data type: number (generic numeric) or uint32.',
