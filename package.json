@@ -5,7 +5,8 @@
   "author": "LT IDP",
   "main": "dist-electron/main.js",
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
+    "rebuild:native": "npm rebuild better-sqlite3 serialport",
+    "rebuild:electron": "electron-builder install-app-deps",
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "electron .",
@@ -13,7 +14,7 @@
     "build:vite": "vite build",
     "build:electron": "tsc -p electron/tsconfig.json",
     "prebuild:app": "npm run build",
-    "build:app": "electron-builder",
+    "build:app": "npm run rebuild:electron && electron-builder",
     "start": "electron .",
     "preview": "vite preview",
     "test": "vitest run",

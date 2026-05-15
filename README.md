@@ -25,7 +25,7 @@ If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm install` in the repo r
 npm install
 ```
 
-For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) or Visual Studio Build Tools. After `npm install`, `postinstall` runs `electron-builder install-app-deps` so addons match the pinned Electron version. See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for full Windows/Linux steps and `build:app` / `build:web` order.
+For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) or Visual Studio Build Tools. **Web mode** (`start:web`) uses Node-native addons; **`npm run build:app`** runs `rebuild:electron` for the installer. If `start:web` reports a NODE_MODULE_VERSION mismatch, run **`npm run rebuild:native`**. See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for full steps.
 
 ### Linux (Ubuntu): `better-sqlite3` / `node-gyp` errors
 

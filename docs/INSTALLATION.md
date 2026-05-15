@@ -325,14 +325,18 @@ If **`build:app`** fails while rebuilding **`better-sqlite3`**:
 
 3. If **node-gyp** mentions **MSBuild** or **Visual Studio**, install **Build Tools for Visual Studio** with **“Desktop development with C++”**: https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-4. After `npm install`, **`postinstall`** runs `electron-builder install-app-deps` so native modules match Electron. If you upgraded Node or Electron manually, run:
+4. `build:app` runs **`npm run rebuild:electron`** before packaging (native modules for Electron, not for Node).
 
-   ```powershell
-   npx electron-builder install-app-deps
-   npm run build:app
-   ```
+**You do not need `build:app` for web mode** — only `npm install`, `build:web`, and `start:web`.
 
-**You do not need `build:app` for web mode** — only `build:web` + `start:web`.
+**If `start:web` fails with NODE_MODULE_VERSION 121 vs 127** — `better-sqlite3` was built for **Electron** but you are running **Node** (web server). Fix:
+
+```powershell
+npm run rebuild:native
+npm run start:web
+```
+
+After building a desktop installer on the same PC, run **`npm run rebuild:native`** again before **`start:web`**.
 
 Set **`DATA_DIR`** to a folder where SQLite and exports should live, for example:
 
@@ -377,6 +381,7 @@ npm run start:web
 | `better-sqlite3` fails (Windows) | Pull latest repo (Electron 29 pin), `npm install`, then `npm run build:app`. If still failing: Python 3 on PATH + **Visual Studio Build Tools** (C++), then `npx electron-builder install-app-deps`. |
 | `prebuild-install` **404** for `electron-v119` | Old lockfile used Electron **28**; delete `node_modules`, `npm install` again on current `main`. |
 | `Cannot find module dist-server\server\index.js` | Run **`npm run build:web`** before **`npm run start:web`**. |
+| `NODE_MODULE_VERSION 121` vs **127** (or similar) on `start:web` | Run **`npm run rebuild:native`**, then **`npm run start:web`**. Caused by Electron-native rebuild; web mode needs Node-native `better-sqlite3`. |
 | Cannot open port 3001 | Another app may use the port; set `PORT` to another value and restart. |
 | PM2 cannot find `dist-server` | Run `npm run build:web` from the repo root; check `cwd` in `ecosystem.config.cjs`. |
 
