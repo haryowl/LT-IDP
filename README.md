@@ -115,6 +115,7 @@ Preload script is built to `dist-electron/preload.js` and loaded at runtime via 
 ```
 
 - **Roles:** `admin`, `viewer`, and `guest`. SPARING menu/route are available for `admin` + `guest`; `guest` is restricted to SPARING only.
+- **Modbus RTU:** Multiple slave IDs on one RS-485 line share a single serial port: add one Modbus **device** per slave with the **same COM/port and line settings** (baud, parity, data/stop bits); only **slave ID** differs. Requests are serialized on the bus.
 - **Types:** See `docs/TYPES.md` for where API and entity types are defined.
 
 ## Tests

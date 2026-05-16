@@ -9,10 +9,60 @@ const BAD_CONNECTION_THRESHOLD_MS = 10_000;
 const RECONNECT_DELAY_MS = 3_000;
 /** Delay before retry when reconnect attempt fails (ms). Keeps retrying when device powered off. */
 const RECONNECT_RETRY_DELAY_MS = 5_000;
+/** Extra wait after closing RTU so Windows releases COM before reconnect (ms). */
+const RTU_PORT_RELEASE_MS = 400;
+
+function formatRtuSerialError(serialPort: string | undefined, raw: string): string {
+  const port = serialPort || 'serial port';
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('access denied') ||
+    lower.includes('permission denied') ||
+    lower.includes('eacces')
+  ) {
+    if (process.platform === 'win32') {
+      return (
+        `Cannot open ${port}: access denied. Another program is using this COM port, or a previous connection did not release it. ` +
+        `Close GNSS (Settings) if it uses the same port, quit PuTTY/Modbus tools, stop duplicate LT-IDP/Node processes, disable Auto start on this device, restart the app, then connect again.`
+      );
+    }
+    return (
+      `Serial port access denied for ${port}. Add your user to the dialout group: sudo usermod -aG dialout $USER (log out and back in), ` +
+      `and ensure no other process is using the port.`
+    );
+  }
+  if (lower.includes('enoent') || lower.includes('no such file') || lower.includes('cannot find')) {
+    return `Serial port not found: ${port}. Check the cable/USB adapter and the port name in Device Manager.`;
+  }
+  if (lower.includes('setcommstate') || lower.includes('error code 31')) {
+    return (
+      `Cannot configure ${port} (Windows driver error). Check USB adapter drivers in Device Manager, power-cycle the adapter, ` +
+      `and verify baud rate, parity, and stop bits match the device.`
+    );
+  }
+  return raw;
+}
+
+/** One open serial port + shared Modbus client for all RTU slaves on that RS-485 line (same UART settings). */
+interface SharedRtuBus {
+  key: string;
+  /** Normalized path (e.g. COM3) for conflict checks */
+  serialPath: string;
+  client: ModbusRTU;
+  deviceIds: Set<string>;
+  listenerAttached: boolean;
+  /** Client timeout (ms); max of connected devices' timeouts on this bus */
+  maxTimeoutMs: number;
+  onCloseOrError?: () => void;
+  /** Avoid re-entrancy when tearing down after a fatal bus error */
+  handlingFatal?: boolean;
+}
 
 interface ModbusConnection {
   device: ModbusDevice;
   client: ModbusRTU;
+  /** When set, `client` is owned by `ModbusService.rtuBuses[rtuBusKey]`; do not close it on sole disconnect. */
+  rtuBusKey?: string;
   registers: ModbusRegister[];
   pollTimer?: NodeJS.Timeout;
   recordTimer?: NodeJS.Timeout;
@@ -39,9 +89,56 @@ interface ModbusConnection {
 export class ModbusService extends EventEmitter {
   private connections: Map<string, ModbusConnection> = new Map();
   private reconnectStats: Map<string, { attempts: number; lastReconnectAt?: number }> = new Map();
+  /** Shared RTU buses keyed by port + UART parameters (not slave ID). */
+  private rtuBuses: Map<string, SharedRtuBus> = new Map();
+  /** Serialize Modbus transactions per RTU bus (one master on the wire at a time). */
+  private rtuBusChains: Map<string, Promise<unknown>> = new Map();
 
   constructor(private db: DatabaseService) {
     super();
+  }
+
+  private normalizeSerialPath(port: string): string {
+    const p = (port || '').trim();
+    if (!p) return p;
+    if (process.platform === 'win32' && /^com\d+$/i.test(p)) return p.toUpperCase();
+    return p;
+  }
+
+  /** Unique key for an RS-485 line: same COM + baud + framing. All slaves on the bus must match. */
+  private getRtuBusKey(device: ModbusDevice): string {
+    const path = this.normalizeSerialPath(device.serialPort!);
+    const br = device.baudRate || 9600;
+    const db = device.dataBits || 8;
+    const sb = device.stopBits || 1;
+    const par = ((device.parity as string) || 'none').toLowerCase();
+    return `rtu:${path}|${br}|${db}|${sb}|${par}`;
+  }
+
+  /** Same physical port cannot be opened twice with different UART settings. */
+  private assertNoConflictingRtuPort(device: ModbusDevice, busKey: string): void {
+    const path = this.normalizeSerialPath(device.serialPort!);
+    for (const bus of this.rtuBuses.values()) {
+      if (bus.serialPath === path && bus.key !== busKey) {
+        throw new Error(
+          `Serial port ${device.serialPort} is already open with different baud/parity/data/stop settings. ` +
+            `All Modbus RTU slaves on one RS-485 bus must use the same line settings; only slave ID may differ.`
+        );
+      }
+    }
+  }
+
+  private runOnRtuBus<T>(busKey: string, fn: () => Promise<T>): Promise<T> {
+    const tail = this.rtuBusChains.get(busKey) ?? Promise.resolve();
+    const p = tail.then(() => fn()) as Promise<T>;
+    this.rtuBusChains.set(
+      busKey,
+      p.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    return p;
   }
 
   async connect(deviceId: string): Promise<void> {
@@ -58,7 +155,8 @@ export class ModbusService extends EventEmitter {
       await this.disconnect(deviceId);
     }
 
-    const client = new ModbusRTU();
+    let client: ModbusRTU;
+    let rtuBusKey: string | undefined;
     let registers = this.db.getModbusRegisters(deviceId);
     console.log(`Connecting to Modbus device: ${device.name}`);
     console.log(`Type: ${device.type}, Host: ${device.host}, Port: ${device.port}, Slave ID: ${device.slaveId}`);
@@ -67,32 +165,74 @@ export class ModbusService extends EventEmitter {
     const type = (device.type || '').toString().toLowerCase();
     try {
       if (type === 'tcp') {
+        client = new ModbusRTU();
         const host = (device.host || '').trim();
         const port = device.port || 502;
         if (!host) throw new Error('TCP host is required');
         console.log(`Attempting TCP connection to ${host}:${port}...`);
         await client.connectTCP(host, { port });
         console.log(`TCP connection successful`);
+        client.setID(device.slaveId);
+        client.setTimeout(device.timeout);
+        console.log(`Modbus client configured - Slave ID: ${device.slaveId}, Timeout: ${device.timeout}ms`);
       } else if (type === 'rtu') {
-        console.log(`Attempting RTU connection to ${device.serialPort}...`);
-        await client.connectRTUBuffered(device.serialPort!, {
-          baudRate: device.baudRate || 9600,
-          dataBits: device.dataBits || 8,
-          stopBits: device.stopBits || 1,
-          parity: (device.parity as 'none' | 'even' | 'odd' | 'mark' | 'space') || 'none',
-        });
-        console.log(`RTU connection successful`);
+        if (!device.serialPort?.trim()) {
+          throw new Error('Serial port is required for RTU');
+        }
+        const busKey = this.getRtuBusKey(device);
+        this.assertNoConflictingRtuPort(device, busKey);
+        const serialPath = this.normalizeSerialPath(device.serialPort!);
+        let bus = this.rtuBuses.get(busKey);
+        if (bus) {
+          client = bus.client;
+          bus.deviceIds.add(deviceId);
+          const t = device.timeout || 5000;
+          bus.maxTimeoutMs = Math.max(bus.maxTimeoutMs, t);
+          client.setTimeout(bus.maxTimeoutMs);
+          rtuBusKey = busKey;
+          console.log(
+            `RTU ${device.serialPort}: using shared bus (${bus.deviceIds.size} logical device(s) on this port); this slave ID: ${device.slaveId}`
+          );
+        } else {
+          console.log(`Attempting RTU connection to ${device.serialPort} (new shared bus)...`);
+          client = new ModbusRTU();
+          await client.connectRTUBuffered(device.serialPort!, {
+            baudRate: device.baudRate || 9600,
+            dataBits: device.dataBits || 8,
+            stopBits: device.stopBits || 1,
+            parity: (device.parity as 'none' | 'even' | 'odd' | 'mark' | 'space') || 'none',
+          });
+          const t = device.timeout || 5000;
+          bus = {
+            key: busKey,
+            serialPath,
+            client,
+            deviceIds: new Set([deviceId]),
+            listenerAttached: false,
+            maxTimeoutMs: t,
+          };
+          client.setTimeout(t);
+          this.rtuBuses.set(busKey, bus);
+          this.attachRtuBusListeners(busKey);
+          rtuBusKey = busKey;
+          console.log(`RTU connection successful`);
+        }
+        console.log(`Modbus RTU configured for ${device.name} — slave ID: ${device.slaveId}`);
       } else {
         throw new Error(`Unsupported device type: ${device.type}. Use TCP or RTU.`);
       }
 
-      client.setID(device.slaveId);
-      client.setTimeout(device.timeout);
-      console.log(`Modbus client configured - Slave ID: ${device.slaveId}, Timeout: ${device.timeout}ms`);
-
       if (registers.length === 0) {
         console.log(`No registers configured for ${device.name}. Attempting automatic discovery...`);
-        registers = await this.autoDiscoverRegisters(device, client, registers);
+        if (type === 'rtu' && rtuBusKey) {
+          registers = await this.runOnRtuBus(rtuBusKey, async () => {
+            client.setID(device.slaveId);
+            return this.autoDiscoverRegisters(device, client, registers);
+          });
+        } else {
+          client.setID(device.slaveId);
+          registers = await this.autoDiscoverRegisters(device, client, registers);
+        }
         console.log(`Auto-discovery completed. Registers found: ${registers.length}`);
       }
 
@@ -109,6 +249,7 @@ export class ModbusService extends EventEmitter {
       const connection: ModbusConnection = {
         device,
         client,
+        rtuBusKey,
         registers,
         lastSuccessfulPollTime: Date.now(),
         status: {
@@ -126,28 +267,35 @@ export class ModbusService extends EventEmitter {
       };
 
       this.connections.set(deviceId, connection);
-      this.attachSocketListeners(deviceId);
+      if (type === 'tcp') {
+        this.attachSocketListeners(deviceId);
+      }
       this.startPolling(deviceId);
       this.startRecording(deviceId);
       console.log(`Device ${device.name} connected successfully, starting polling...`);
       this.emit('connected', deviceId);
     } catch (error: any) {
       console.error(`Connection error for ${device.name}:`, error);
-      let message = error?.message ?? String(error);
-      const type = (device.type || '').toString().toLowerCase();
-      if (type === 'rtu' && message) {
-        if (message.includes('Permission denied') || message.includes('EACCES'))
-          message = `Serial port access denied for ${device.serialPort}. On Linux, add your user to the dialout group: sudo usermod -aG dialout $USER (then log out and back in).`;
-        else if (message.includes('ENOENT') || message.includes('No such file'))
-          message = `Serial port not found: ${device.serialPort}. Check the port path (e.g. /dev/ttyUSB0) and that the device is connected.`;
+      if (rtuBusKey) {
+        const bus = this.rtuBuses.get(rtuBusKey);
+        if (bus) {
+          bus.deviceIds.delete(deviceId);
+          if (bus.deviceIds.size === 0) {
+            if (bus.onCloseOrError) {
+              this.clientEmitter(bus.client).removeListener('close', bus.onCloseOrError);
+              this.clientEmitter(bus.client).removeListener('error', bus.onCloseOrError);
+            }
+            this.rtuBuses.delete(rtuBusKey);
+            this.rtuBusChains.delete(rtuBusKey);
+            void this.closeModbusClient(bus.client);
+          }
+        }
       }
-      const status = {
-        deviceId: device.id,
-        deviceName: device.name,
-        type: 'modbus' as const,
-        connected: false,
-        lastError: message,
-      };
+      let message = error?.message ?? String(error);
+      const typeErr = (device.type || '').toString().toLowerCase();
+      if (typeErr === 'rtu' && message) {
+        message = formatRtuSerialError(device.serialPort, message);
+      }
 
       if (this.connections.has(deviceId)) {
         this.connections.delete(deviceId);
@@ -158,6 +306,7 @@ export class ModbusService extends EventEmitter {
     }
   }
 
+  /** Attach close/error listeners for TCP Modbus connections (each device has its own socket). */
   private attachSocketListeners(deviceId: string): void {
     const connection = this.connections.get(deviceId);
     if (!connection) return;
@@ -171,6 +320,75 @@ export class ModbusService extends EventEmitter {
     connection.client.on('close', onCloseOrError);
     connection.client.on('error', onCloseOrError);
     (connection as any)._onCloseOrError = onCloseOrError;
+  }
+
+  /** One listener per shared RTU serial port (not per logical Modbus device). */
+  private attachRtuBusListeners(busKey: string): void {
+    const bus = this.rtuBuses.get(busKey);
+    if (!bus || bus.listenerAttached) return;
+    const onCloseOrError = () => {
+      void this.onSharedRtuBusFatal(busKey);
+    };
+    bus.client.on('close', onCloseOrError);
+    bus.client.on('error', onCloseOrError);
+    bus.onCloseOrError = onCloseOrError;
+    bus.listenerAttached = true;
+  }
+
+  private async onSharedRtuBusFatal(busKey: string): Promise<void> {
+    const bus = this.rtuBuses.get(busKey);
+    if (!bus || bus.handlingFatal) return;
+    bus.handlingFatal = true;
+    const ids = Array.from(bus.deviceIds);
+    console.warn(`Modbus RTU bus ${bus.serialPath}: connection lost; scheduling reconnect for ${ids.length} device(s)`);
+
+    if (bus.onCloseOrError) {
+      this.clientEmitter(bus.client).removeListener('close', bus.onCloseOrError);
+      this.clientEmitter(bus.client).removeListener('error', bus.onCloseOrError);
+    }
+    this.rtuBuses.delete(busKey);
+    this.rtuBusChains.delete(busKey);
+
+    for (const id of ids) {
+      const conn = this.connections.get(id);
+      if (conn) {
+        if (conn.pollTimer) clearInterval(conn.pollTimer);
+        if (conn.recordTimer) clearInterval(conn.recordTimer);
+        this.connections.delete(id);
+        conn.status.connected = false;
+        conn.status.lastError = 'RTU serial bus connection lost';
+        conn.status.reconnecting = false;
+        this.emit('disconnected', id);
+      }
+    }
+
+    bus.handlingFatal = false;
+
+    for (const id of ids) {
+      const d = this.db.getModbusDeviceById(id);
+      if (d?.enabled) {
+        this.scheduleReconnect(id, RECONNECT_DELAY_MS);
+      }
+    }
+  }
+
+  private closeModbusClient(client: ModbusRTU): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        if (client?.isOpen) {
+          client.close(() => resolve());
+        } else {
+          resolve();
+        }
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  /** modbus-serial client is event-emitting at runtime; types omit Node's removeListener. */
+  private clientEmitter(client: ModbusRTU): EventEmitter {
+    return client as unknown as EventEmitter;
   }
 
   async disconnect(deviceId: string): Promise<void> {
@@ -193,12 +411,44 @@ export class ModbusService extends EventEmitter {
       clearInterval(connection.recordTimer);
     }
 
-    try {
-      if (connection.client?.isOpen) {
-        connection.client.close(() => {});
+    const busKey = connection.rtuBusKey;
+    if (busKey) {
+      const bus = this.rtuBuses.get(busKey);
+      if (bus) {
+        bus.deviceIds.delete(deviceId);
+        if (bus.deviceIds.size === 0) {
+          if (bus.onCloseOrError) {
+            this.clientEmitter(bus.client).removeListener('close', bus.onCloseOrError);
+            this.clientEmitter(bus.client).removeListener('error', bus.onCloseOrError);
+          }
+          this.rtuBuses.delete(busKey);
+          this.rtuBusChains.delete(busKey);
+          try {
+            await this.closeModbusClient(bus.client);
+            await new Promise((r) => setTimeout(r, RTU_PORT_RELEASE_MS));
+          } catch (err: any) {
+            console.error(`Error closing RTU bus ${busKey}:`, err);
+          }
+        } else {
+          let maxT = 5000;
+          for (const id of bus.deviceIds) {
+            const d = this.db.getModbusDeviceById(id);
+            if (d) maxT = Math.max(maxT, d.timeout || 5000);
+          }
+          bus.maxTimeoutMs = maxT;
+          bus.client.setTimeout(maxT);
+        }
       }
-    } catch (error: any) {
-      console.error(`Error closing Modbus connection for ${deviceId}:`, error);
+    } else {
+      try {
+        await this.closeModbusClient(connection.client);
+        const deviceType = (connection.device.type || '').toString().toLowerCase();
+        if (deviceType === 'rtu') {
+          await new Promise((r) => setTimeout(r, RTU_PORT_RELEASE_MS));
+        }
+      } catch (error: any) {
+        console.error(`Error closing Modbus connection for ${deviceId}:`, error);
+      }
     }
 
     this.connections.delete(deviceId);
@@ -227,86 +477,93 @@ export class ModbusService extends EventEmitter {
       }
 
       try {
-        console.log(`Polling ${connection.registers.length} registers from ${connection.device.name}...`);
-        let successCount = 0;
-        for (const register of connection.registers) {
-          console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
-          const timestamp = Date.now();
-          try {
-            const data = await this.readRegister(connection.client, register);
-            console.log(`Register ${register.name} value:`, data);
+        const c = connectionNow;
+        const runPollReads = async () => {
+          c.client.setID(c.device.slaveId);
+          console.log(`Polling ${c.registers.length} registers from ${c.device.name}...`);
+          let successCount = 0;
+          for (const register of c.registers) {
+            console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
+            const timestamp = Date.now();
+            try {
+              const data = await this.readRegister(c.client, register);
+              console.log(`Register ${register.name} value:`, data);
 
-            connection.lastRecordedData.set(register.id, {
-              value: data,
-              timestamp,
-              quality: 'good',
-              registerName: register.name,
-            });
+              c.lastRecordedData.set(register.id, {
+                value: data,
+                timestamp,
+                quality: 'good',
+                registerName: register.name,
+              });
 
-            const payload = {
-              deviceId,
-              registerId: register.id,
-              registerName: register.name,
-              value: data,
-              timestamp,
-              quality: 'good' as const,
-            };
-            this.emit('data', payload);
-            this.emit(`data:${deviceId}:${register.id}`, payload);
+              const payload = {
+                deviceId,
+                registerId: register.id,
+                registerName: register.name,
+                value: data,
+                timestamp,
+                quality: 'good' as const,
+              };
+              this.emit('data', payload);
+              this.emit(`data:${deviceId}:${register.id}`, payload);
 
-            connection.status.messagesReceived = (connection.status.messagesReceived || 0) + 1;
-            connection.status.lastMessageTime = timestamp;
-            successCount++;
-          } catch (registerError: any) {
-            console.error(
-              `Error reading register ${register.name} (FC${register.functionCode}, Addr: ${register.address}) on device ${connection.device.name}:`,
-              registerError
-            );
+              c.status.messagesReceived = (c.status.messagesReceived || 0) + 1;
+              c.status.lastMessageTime = timestamp;
+              successCount++;
+            } catch (registerError: any) {
+              console.error(
+                `Error reading register ${register.name} (FC${register.functionCode}, Addr: ${register.address}) on device ${c.device.name}:`,
+                registerError
+              );
 
-            connection.lastRecordedData.set(register.id, {
-              value: null,
-              timestamp,
-              quality: 'bad',
-              registerName: register.name,
-            });
+              c.lastRecordedData.set(register.id, {
+                value: null,
+                timestamp,
+                quality: 'bad',
+                registerName: register.name,
+              });
 
-            const payload = {
-              deviceId,
-              registerId: register.id,
-              registerName: register.name,
-              value: null,
-              timestamp,
-              quality: 'bad' as const,
-            };
-            this.emit('data', payload);
-            this.emit(`data:${deviceId}:${register.id}`, payload);
+              const payload = {
+                deviceId,
+                registerId: register.id,
+                registerName: register.name,
+                value: null,
+                timestamp,
+                quality: 'bad' as const,
+              };
+              this.emit('data', payload);
+              this.emit(`data:${deviceId}:${register.id}`, payload);
+            }
           }
-        }
 
-        if (successCount > 0) {
-          connection.lastSuccessfulPollTime = Date.now();
-          connection.status.connected = true;
-          connection.status.lastError = undefined;
-        } else if (connection.registers.length > 0) {
-          connection.status.connected = false;
-          connection.status.lastError = 'All registers failed this poll';
-          if (
-            connection.lastSuccessfulPollTime != null &&
-            now - connection.lastSuccessfulPollTime > BAD_CONNECTION_THRESHOLD_MS
-          ) {
-            console.log(
-              `Modbus device ${connection.device.name}: bad for ${BAD_CONNECTION_THRESHOLD_MS / 1000}s, reconnecting...`
-            );
-            this.reconnect(deviceId);
-            return;
+          if (successCount > 0) {
+            c.lastSuccessfulPollTime = Date.now();
+            c.status.connected = true;
+            c.status.lastError = undefined;
+          } else if (c.registers.length > 0) {
+            c.status.connected = false;
+            c.status.lastError = 'All registers failed this poll';
+            if (c.lastSuccessfulPollTime != null && now - c.lastSuccessfulPollTime > BAD_CONNECTION_THRESHOLD_MS) {
+              console.log(`Modbus device ${c.device.name}: bad for ${BAD_CONNECTION_THRESHOLD_MS / 1000}s, reconnecting...`);
+              this.reconnect(deviceId);
+              return;
+            }
           }
+          console.log(`Poll complete. Messages received: ${c.status.messagesReceived}`);
+        };
+
+        if (c.rtuBusKey) {
+          await this.runOnRtuBus(c.rtuBusKey, runPollReads);
+        } else {
+          await runPollReads();
         }
-        console.log(`Poll complete. Messages received: ${connection.status.messagesReceived}`);
       } catch (error: any) {
-        console.error(`Polling error for device ${connection.device.name}:`, error);
+        const cErr = this.connections.get(deviceId);
+        if (!cErr) return;
+        console.error(`Polling error for device ${cErr.device.name}:`, error);
         console.error(`Error stack:`, error.stack);
-        connection.status.connected = false;
-        connection.status.lastError = error.message;
+        cErr.status.connected = false;
+        cErr.status.lastError = error.message;
         this.reconnect(deviceId);
       }
     };
@@ -395,10 +652,18 @@ export class ModbusService extends EventEmitter {
       throw new Error('Writes are only supported for coils (FC1) and holding registers (FC3).');
     }
     const client = connection.client;
-    if (register.functionCode === 1) {
-      await this.writeCoilsFromRegister(client, register, value);
+    const doWrite = async () => {
+      client.setID(connection.device.slaveId);
+      if (register.functionCode === 1) {
+        await this.writeCoilsFromRegister(client, register, value);
+      } else {
+        await this.writeHoldingFromRegister(client, register, value);
+      }
+    };
+    if (connection.rtuBusKey) {
+      await this.runOnRtuBus(connection.rtuBusKey, doWrite);
     } else {
-      await this.writeHoldingFromRegister(client, register, value);
+      await doWrite();
     }
     this.emit('write', {
       deviceId,

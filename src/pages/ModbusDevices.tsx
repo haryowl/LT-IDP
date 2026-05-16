@@ -729,6 +729,11 @@ const ModbusDevices: React.FC = () => {
               </>
             ) : (
               <>
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  Multiple slaves on one RS-485 bus: create one device per slave ID. Use{' '}
+                  <strong>the same serial port and line settings</strong> (baud, parity, data/stop bits); only slave ID
+                  differs. LT-IDP opens one COM port and shares it across those devices.
+                </Alert>
                 {serialPortsLoading ? (
                   <TextField label="Serial Port" value="" fullWidth disabled placeholder="Loading ports..." />
                 ) : serialPorts.length > 0 ? (
