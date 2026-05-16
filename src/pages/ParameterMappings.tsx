@@ -723,23 +723,92 @@ const ParameterMappings: React.FC = () => {
               <Collapse in={showTransformHelp}>
                 <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2" gutterBottom>
-                    <strong>Transform Expression Examples:</strong>
+                    <strong>Basic examples:</strong>
                   </Typography>
                   <Typography variant="body2" component="div">
                     <ul style={{ margin: 0, paddingLeft: 20 }}>
-                      <li><strong>Scale:</strong> <code>value * 10</code></li>
-                      <li><strong>Offset:</strong> <code>value + 100</code></li>
-                      <li><strong>Temperature conversion:</strong> <code>value * 1.8 + 32</code> (Celsius to Fahrenheit)</li>
-                      <li><strong>Round to 2 decimals:</strong> <code>Math.round(value * 100) / 100</code></li>
-                      <li><strong>Absolute value:</strong> <code>Math.abs(value)</code></li>
-                      <li><strong>Square root:</strong> <code>Math.sqrt(value)</code></li>
-                      <li><strong>Power:</strong> <code>Math.pow(value, 2)</code></li>
-                      <li><strong>Conditional:</strong> <code>value &gt; 0 ? value : 0</code></li>
-                      <li><strong>Logarithm:</strong> <code>Math.log(value)</code></li>
+                      <li>
+                        <strong>Scale:</strong> <code>value * 10</code>
+                      </li>
+                      <li>
+                        <strong>Offset:</strong> <code>value + 100</code>
+                      </li>
+                      <li>
+                        <strong>Temperature (°C → °F):</strong> <code>value * 1.8 + 32</code>
+                      </li>
+                      <li>
+                        <strong>Round 2 decimals:</strong> <code>Math.round(value * 100) / 100</code>
+                      </li>
+                      <li>
+                        <strong>Absolute value:</strong> <code>Math.abs(value)</code>
+                      </li>
+                      <li>
+                        <strong>Square root:</strong> <code>Math.sqrt(value)</code>
+                      </li>
+                      <li>
+                        <strong>Power:</strong> <code>Math.pow(value, 2)</code>
+                      </li>
+                      <li>
+                        <strong>Logarithm:</strong> <code>Math.log(value)</code>
+                      </li>
                     </ul>
                   </Typography>
+
+                  <Typography variant="body2" gutterBottom sx={{ mt: 2 }}>
+                    <strong>If-style logic (expressions only — no bare &quot;if&quot; statement; the field is one expression):</strong>
+                  </Typography>
+                  <Typography variant="body2" component="div">
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>
+                      <li>
+                        <strong>If / else (ternary):</strong>{' '}
+                        <code>value &gt; 0 ? value : 0</code> — use the value only when positive, otherwise 0
+                      </li>
+                      <li>
+                        <strong>Clamp between min and max:</strong>{' '}
+                        <code>value &lt; 0 ? 0 : value &gt; 100 ? 100 : value</code>
+                      </li>
+                      <li>
+                        <strong>Else-if chain (nested ternary):</strong>{' '}
+                        <code>value === 0 ? &apos;Off&apos; : value === 1 ? &apos;On&apos; : &apos;Other&apos;</code> (string
+                        mapping type)
+                      </li>
+                      <li>
+                        <strong>Default when nullish:</strong> <code>value == null ? 0 : value</code> or{' '}
+                        <code>value ?? 0</code>
+                      </li>
+                      <li>
+                        <strong>Multi-step with real <code>if</code> (IIFE):</strong>{' '}
+                        <code>
+                          (function (v) {'{'} if (v &lt; 0) return 0; if (v &gt; 100) return 100; return v; {'}'})(value)
+                        </code>
+                      </li>
+                      <li>
+                        <strong>Hold last good raw when current raw is zero</strong> (uses <code>lastPositive</code>, see
+                        below): <code>value &gt; 0 ? value : (lastPositive ?? 0)</code>
+                      </li>
+                      <li>
+                        <strong>Same, only treat exact <code>0</code> as hold; pass negatives through:</strong>{' '}
+                        <code>value &gt; 0 ? value : value === 0 ? (lastPositive ?? 0) : value</code>
+                      </li>
+                    </ul>
+                  </Typography>
+
+                  <Typography variant="body2" gutterBottom sx={{ mt: 2 }}>
+                    <strong>
+                      <code>lastPositive</code> — stateful &quot;last raw &gt; 0&quot; for this mapping
+                    </strong>
+                  </Typography>
+                  <Typography variant="body2" component="div" sx={{ mt: 0.5 }}>
+                    After each successful update, the app remembers the last raw <code>value</code> with{' '}
+                    <code>Number(value) &gt; 0</code>. Use it in the expression as <code>lastPositive</code> (
+                    <code>undefined</code> until the first such sample). Cleared when the mapping row is removed from the
+                    DB on reload.
+                  </Typography>
+
                   <Typography variant="body2" sx={{ mt: 1 }}>
-                    <strong>Available variables:</strong> <code>value</code> (input value), <code>Math</code>, <code>Number</code>, <code>String</code>, <code>Boolean</code>, <code>Date</code>
+                    <strong>Available variables:</strong> <code>value</code> (input before transform),{' '}
+                    <code>lastPositive</code>, <code>Math</code>, <code>Number</code>, <code>String</code>,{' '}
+                    <code>Boolean</code>, <code>Date</code>. No <code>console</code> or other globals.
                   </Typography>
                 </Alert>
               </Collapse>

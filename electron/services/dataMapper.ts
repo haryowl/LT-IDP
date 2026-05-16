@@ -12,6 +12,11 @@ export class DataMapperService extends EventEmitter {
   private systemTimestampIntervalMs: number;
   private systemGnssHistoryIntervalMs: number;
   private lastStoredTimestamps: Map<string, number> = new Map();
+  /**
+   * For transform expressions: last raw `value` with `Number(value) > 0` seen for this mapping
+   * (updated after each successful transform). Not available when expression is omitted unless still updated for next time.
+   */
+  private lastPositiveSourceByMappingId: Map<string, number> = new Map();
 
   constructor(private db: DatabaseService, private gnss?: GnssService) {
     super();
@@ -63,6 +68,10 @@ export class DataMapperService extends EventEmitter {
   reloadMappings(): void {
     this.loadMappings();
     this.lastStoredTimestamps.clear();
+    const ids = new Set(this.mappings.keys());
+    for (const id of this.lastPositiveSourceByMappingId.keys()) {
+      if (!ids.has(id)) this.lastPositiveSourceByMappingId.delete(id);
+    }
   }
 
   async mapModbusData(data: any): Promise<void> {
@@ -181,8 +190,10 @@ export class DataMapperService extends EventEmitter {
 
       if (mapping.transformExpression) {
         try {
+          const lastPositive = this.lastPositiveSourceByMappingId.get(mapping.id);
           const context = {
             value,
+            lastPositive,
             Math,
             Date,
             Number,
@@ -222,6 +233,11 @@ export class DataMapperService extends EventEmitter {
         }
       } else {
         transformedValue = this.castToType(transformedValue, mapping.dataType);
+      }
+
+      const rawNum = Number(value);
+      if (Number.isFinite(rawNum) && rawNum > 0) {
+        this.lastPositiveSourceByMappingId.set(mapping.id, rawNum);
       }
 
       return {
