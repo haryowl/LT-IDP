@@ -5,9 +5,11 @@ import type { DatabaseService } from './database';
 import type { Publisher, RealtimeData } from '../types';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
 import {
+  clearScheduledPublisherTimer,
   collectScheduledPublishBatch,
   computeScheduledPublishWindow,
   getScheduledIntervalMs,
+  isScheduledPublishingEnabled,
   msUntilNextScheduledBoundary,
 } from './scheduledPublisherHelpers';
 
@@ -17,6 +19,7 @@ interface HttpClientConnection {
   buffer: RealtimeData[];
   flushTimer?: NodeJS.Timeout;
   scheduledTimer?: NodeJS.Timeout;
+  scheduledPublishInFlight?: boolean;
 }
 
 interface HttpLikeConfig {
@@ -33,6 +36,12 @@ interface HttpLikeConfig {
 
 export class HttpClientService extends EventEmitter {
   private connections: Map<string, HttpClientConnection> = new Map();
+
+  private resolvePublisher(publisherId: string): Publisher | undefined {
+    const connection = this.connections.get(publisherId);
+    if (connection) return connection.publisher;
+    return this.db.getPublisherById(publisherId);
+  }
 
   constructor(private db: DatabaseService) {
     super();
@@ -195,7 +204,9 @@ export class HttpClientService extends EventEmitter {
         timestamp: Date.now(),
       });
 
-      this.processBufferQueue(publisherId);
+      if (!isScheduledPublishingEnabled(publisher)) {
+        this.processBufferQueue(publisherId);
+      }
 
       if (!publisher.scheduledEnabled && (publisher.mode === 'buffer' || publisher.mode === 'both')) {
         if (publisher.bufferFlushInterval) {
@@ -232,10 +243,8 @@ export class HttpClientService extends EventEmitter {
     if (connection.flushTimer) {
       clearInterval(connection.flushTimer);
     }
-    if (connection.scheduledTimer) {
-      clearTimeout(connection.scheduledTimer);
-      clearInterval(connection.scheduledTimer);
-    }
+    clearScheduledPublisherTimer(connection.scheduledTimer);
+    connection.scheduledTimer = undefined;
 
     await this.flushBuffer(publisherId);
     this.connections.delete(publisherId);
@@ -251,6 +260,11 @@ export class HttpClientService extends EventEmitter {
   }
 
   async publish(publisherId: string, data: RealtimeData): Promise<void> {
+    const publisherConfig = this.resolvePublisher(publisherId);
+    if (isScheduledPublishingEnabled(publisherConfig)) {
+      return;
+    }
+
     console.log(`   📥 [HTTP PUBLISHER] Received data for publisher ID: ${publisherId}`);
     console.log(`      Data: ${data.mappingName} = ${data.value} (ID: ${data.mappingId})`);
 
@@ -268,10 +282,6 @@ export class HttpClientService extends EventEmitter {
     }
 
     const publisher = connection.publisher;
-    if (publisher.scheduledEnabled) {
-      console.log(`   ⏸️  [HTTP PUBLISHER] "${publisher.name}" skipping realtime/buffer publish because scheduled publishing is enabled`);
-      return;
-    }
     const shouldPublish = publisher.mappingIds.length === 0 || publisher.mappingIds.includes(data.mappingId);
     
     console.log(`   🔍 [HTTP PUBLISHER] "${publisher.name}" filter check:`);
@@ -551,23 +561,17 @@ export class HttpClientService extends EventEmitter {
         }, updated.bufferFlushInterval);
       }
 
-      if (updated.scheduledEnabled && updated.scheduledInterval && updated.scheduledIntervalUnit) {
+      if (isScheduledPublishingEnabled(updated)) {
         if (
           !connection.scheduledTimer ||
           oldScheduledEnabled !== updated.scheduledEnabled ||
           oldScheduledInterval !== updated.scheduledInterval ||
           oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
         ) {
-          if (connection.scheduledTimer) {
-            clearTimeout(connection.scheduledTimer);
-            clearInterval(connection.scheduledTimer);
-            connection.scheduledTimer = undefined;
-          }
           this.startScheduledPublishing(publisherId);
         }
-      } else if (connection.scheduledTimer) {
-        clearTimeout(connection.scheduledTimer);
-        clearInterval(connection.scheduledTimer);
+      } else {
+        clearScheduledPublisherTimer(connection.scheduledTimer);
         connection.scheduledTimer = undefined;
       }
     }
@@ -582,6 +586,9 @@ export class HttpClientService extends EventEmitter {
     }
     const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) return;
+
+    clearScheduledPublisherTimer(connection.scheduledTimer);
+    connection.scheduledTimer = undefined;
 
     console.log(
       `⏰ [HTTP PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
@@ -598,22 +605,25 @@ export class HttpClientService extends EventEmitter {
   private async performScheduledPublish(publisherId: string): Promise<void> {
     const connection = this.connections.get(publisherId);
     if (!connection) return;
+    if (connection.scheduledPublishInFlight) return;
+
     const publisher = connection.publisher;
-    if (!publisher.scheduledEnabled) return;
+    if (!isScheduledPublishingEnabled(publisher)) return;
 
-    const mappingsList = this.db.getParameterMappings();
-    const effectiveMappingIds =
-      publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
-    if (effectiveMappingIds.length === 0) return;
-
-    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
-    if (!intervalMs) return;
-
-    const window = computeScheduledPublishWindow(this.db, publisherId, intervalMs);
-    if (!window) return;
-    const { from, to, bucketTs } = window;
+    connection.scheduledPublishInFlight = true;
 
     try {
+      const mappingsList = this.db.getParameterMappings();
+      const effectiveMappingIds =
+        publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
+      if (effectiveMappingIds.length === 0) return;
+
+      const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+      if (!intervalMs) return;
+
+      const window = computeScheduledPublishWindow(this.db, publisherId, intervalMs);
+      if (!window) return;
+      const { from, to, bucketTs } = window;
       const batch = collectScheduledPublishBatch(
         this.db,
         publisher,
@@ -684,6 +694,8 @@ export class HttpClientService extends EventEmitter {
         timestamp: Date.now(),
         error: error.message,
       });
+    } finally {
+      connection.scheduledPublishInFlight = false;
     }
   }
 

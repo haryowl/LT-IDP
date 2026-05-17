@@ -6,9 +6,11 @@ import fs from 'fs';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
 import {
+  clearScheduledPublisherTimer,
   collectScheduledPublishBatch,
   computeScheduledPublishWindow,
   getScheduledIntervalMs,
+  isScheduledPublishingEnabled,
   msUntilNextScheduledBoundary,
 } from './scheduledPublisherHelpers';
 
@@ -20,6 +22,7 @@ interface PublisherConnection {
   buffer: RealtimeData[];
   flushTimer?: NodeJS.Timeout;
   scheduledTimer?: NodeJS.Timeout;
+  scheduledPublishInFlight?: boolean;
   reconnectTimer?: NodeJS.Timeout;
   reconnectAttempts: number;
   maxReconnectAttempts: number;
@@ -28,6 +31,12 @@ interface PublisherConnection {
 
 export class MqttPublisherService extends EventEmitter {
   private connections: Map<string, PublisherConnection> = new Map();
+
+  private resolvePublisher(publisherId: string): Publisher | undefined {
+    const connection = this.connections.get(publisherId);
+    if (connection) return connection.publisher;
+    return this.db.getPublisherById(publisherId);
+  }
   // Cache latest values for each mapping ID per publisher
   private mappingCache: Map<string, Map<string, RealtimeData>> = new Map();
   
@@ -322,11 +331,8 @@ export class MqttPublisherService extends EventEmitter {
       clearInterval(connection.flushTimer);
     }
 
-    // Stop scheduled timer (may be setTimeout before first tick or setInterval)
-    if (connection.scheduledTimer) {
-      clearTimeout(connection.scheduledTimer);
-      clearInterval(connection.scheduledTimer);
-    }
+    clearScheduledPublisherTimer(connection.scheduledTimer);
+    connection.scheduledTimer = undefined;
 
     // Stop reconnect timer
     if (connection.reconnectTimer) {
@@ -367,14 +373,14 @@ export class MqttPublisherService extends EventEmitter {
   }
 
   async publish(publisherId: string, data: RealtimeData): Promise<void> {
-    const connection = this.connections.get(publisherId);
-    
-    // If scheduled publishing is enabled, skip realtime/buffer publishing
-    // Scheduled publishing will handle publishing from historical database
-    if (connection?.publisher.scheduledEnabled) {
-      log.info(`   ⏸️  [MQTT PUBLISHER] Skipping realtime publish - scheduled publishing is enabled for "${connection.publisher.name}"`);
+    const publisherConfig = this.resolvePublisher(publisherId);
+
+    // Scheduled mode: only the interval timer sends (from historical DB / buffer windows).
+    if (isScheduledPublishingEnabled(publisherConfig)) {
       return;
     }
+
+    const connection = this.connections.get(publisherId);
 
     log.info(`   📥 [MQTT PUBLISHER] Received data for publisher ID: ${publisherId}`);
     log.info(`      Data: ${data.mappingName} = ${data.value} (ID: ${data.mappingId})`);
@@ -719,6 +725,9 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
+    clearScheduledPublisherTimer(connection.scheduledTimer);
+    connection.scheduledTimer = undefined;
+
     log.info(
       `⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
     );
@@ -738,23 +747,29 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
+    if (connection.scheduledPublishInFlight) {
+      log.info(`   ⏸️  [MQTT PUBLISHER] Scheduled publish skipped - previous tick still running`);
+      return;
+    }
+
     const publisher = connection.publisher;
-    if (!publisher.scheduledEnabled) {
+    if (!isScheduledPublishingEnabled(publisher)) {
       return;
     }
 
-    const mappingsList = this.db.getParameterMappings();
-    const effectiveMappingIds =
-      publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
-    if (effectiveMappingIds.length === 0) {
-      return;
-    }
-
-    log.info(
-      `   ⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled tick (mode: ${publisher.mode}, one publish per interval)`
-    );
+    connection.scheduledPublishInFlight = true;
 
     try {
+      const mappingsList = this.db.getParameterMappings();
+      const effectiveMappingIds =
+        publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
+      if (effectiveMappingIds.length === 0) {
+        return;
+      }
+
+      log.info(
+        `   ⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled tick (mode: ${publisher.mode}, one publish per interval)`
+      );
       const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
       if (!intervalMs) return;
       const window = computeScheduledPublishWindow(this.db, publisherId, intervalMs);
@@ -837,6 +852,8 @@ export class MqttPublisherService extends EventEmitter {
         timestamp: Date.now(),
         error: error.message,
       });
+    } finally {
+      connection.scheduledPublishInFlight = false;
     }
   }
 
@@ -857,11 +874,8 @@ export class MqttPublisherService extends EventEmitter {
 
       // Restart scheduled publishing if configuration changed
       if (connection.client.connected) {
-        // Stop existing scheduled timer if it exists
-        if (connection.scheduledTimer) {
-          clearInterval(connection.scheduledTimer);
-          connection.scheduledTimer = undefined;
-        }
+        clearScheduledPublisherTimer(connection.scheduledTimer);
+        connection.scheduledTimer = undefined;
 
         if (connection.flushTimer) {
           clearInterval(connection.flushTimer);
@@ -877,23 +891,17 @@ export class MqttPublisherService extends EventEmitter {
           }, updated.bufferFlushInterval);
         }
 
-        if (updated.scheduledEnabled && updated.scheduledInterval && updated.scheduledIntervalUnit) {
+        if (isScheduledPublishingEnabled(updated)) {
           if (
             !connection.scheduledTimer ||
             oldScheduledEnabled !== updated.scheduledEnabled ||
             oldScheduledInterval !== updated.scheduledInterval ||
             oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
           ) {
-            if (connection.scheduledTimer) {
-              clearTimeout(connection.scheduledTimer);
-              clearInterval(connection.scheduledTimer);
-              connection.scheduledTimer = undefined;
-            }
             this.startScheduledPublishing(publisherId);
           }
-        } else if (connection.scheduledTimer) {
-          clearTimeout(connection.scheduledTimer);
-          clearInterval(connection.scheduledTimer);
+        } else {
+          clearScheduledPublisherTimer(connection.scheduledTimer);
           connection.scheduledTimer = undefined;
         }
       }
@@ -1007,8 +1015,8 @@ export class MqttPublisherService extends EventEmitter {
         // Wait a bit before reconnecting
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Remove from connections map before restarting
-        this.connections.delete(publisherId);
+        // Stop cleanly so scheduled/flush timers are not left running on reconnect
+        await this.stop(publisherId);
 
         // Restart the publisher
         await this.start(publisherId);

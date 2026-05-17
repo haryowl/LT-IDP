@@ -1310,9 +1310,13 @@ server.on('upgrade', (req, socket, head) => {
   mqttPublisherService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
   httpClientService.on('log', (logData: any) => broadcast({ type: 'publisher:log', data: logData }));
   dataMapperService.on('dataStored', (data: any) => {
-    const mqttPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'mqtt');
+    const mqttPubs = dbService
+      .getPublishers()
+      .filter((p: any) => p.enabled && p.type === 'mqtt' && !p.scheduledEnabled);
     mqttPubs.forEach((pub: any) => mqttPublisherService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
-    const httpPubs = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'http');
+    const httpPubs = dbService
+      .getPublishers()
+      .filter((p: any) => p.enabled && p.type === 'http' && !p.scheduledEnabled);
     httpPubs.forEach((pub: any) => httpClientService.publish(pub.id, data).catch((e: any) => logger.error(e?.message)));
   });
   dataMapperService.on('dataMapped', (data: any) => {

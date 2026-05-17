@@ -1,6 +1,22 @@
 import type { DatabaseService } from './database';
 import type { Publisher, RealtimeData } from '../types';
 
+export function isScheduledPublishingEnabled(publisher: Publisher | undefined | null): boolean {
+  return !!(
+    publisher?.scheduledEnabled &&
+    publisher.scheduledInterval &&
+    publisher.scheduledInterval > 0 &&
+    publisher.scheduledIntervalUnit
+  );
+}
+
+/** Clear setTimeout (initial delay) and setInterval (recurring tick) from the same handle slot. */
+export function clearScheduledPublisherTimer(timer?: NodeJS.Timeout): void {
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  clearInterval(timer);
+}
+
 export function getScheduledIntervalMs(
   interval?: number,
   unit?: 'seconds' | 'minutes' | 'hours'
@@ -32,6 +48,11 @@ export function computeScheduledPublishWindow(
   let to = Math.ceil(now / intervalMs) * intervalMs;
   const cursor = db.getScheduledPublishCursor(publisherId);
   const from = cursor !== undefined ? cursor : to - intervalMs;
+  // At most one schedule interval per tick (steady cadence when catching up after outages).
+  const maxTo = from + intervalMs;
+  if (to > maxTo) {
+    to = maxTo;
+  }
   while (to <= from) {
     to += intervalMs;
   }

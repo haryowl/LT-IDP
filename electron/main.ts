@@ -179,7 +179,9 @@ async function initializeServices() {
   dataMapperService.on('dataStored', (data: any) => {
     logger.info('[PUBLISHER EVENT] Data stored:', data.mappingId, data.mappingName, data.value, new Date(data.timestamp).toISOString());
 
-    const mqttPublishers = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'mqtt');
+    const mqttPublishers = dbService
+      .getPublishers()
+      .filter((p: any) => p.enabled && p.type === 'mqtt' && !p.scheduledEnabled);
     logger.info('[PUBLISHER] MQTT publishers:', mqttPublishers.length);
     mqttPublishers.forEach((pub: any) => {
       if (pub) {
@@ -189,7 +191,9 @@ async function initializeServices() {
       }
     });
 
-    const httpPublishers = dbService.getPublishers().filter((p: any) => p.enabled && p.type === 'http');
+    const httpPublishers = dbService
+      .getPublishers()
+      .filter((p: any) => p.enabled && p.type === 'http' && !p.scheduledEnabled);
     logger.info('[PUBLISHER] HTTP publishers:', httpPublishers.length);
     httpPublishers.forEach((pub: any) => {
       if (pub) {
