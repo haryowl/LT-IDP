@@ -5,12 +5,13 @@ import type { DatabaseService } from './database';
 import type { Publisher, RealtimeData } from '../types';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
 import {
+  clearPublisherFlushTimer,
   clearScheduledPublisherTimer,
   collectScheduledPublishBatch,
   computeScheduledPublishWindow,
   getScheduledIntervalMs,
   isScheduledPublishingEnabled,
-  msUntilNextScheduledBoundary,
+  syncPublisherDeliveryTimers,
 } from './scheduledPublisherHelpers';
 
 interface HttpClientConnection {
@@ -208,17 +209,19 @@ export class HttpClientService extends EventEmitter {
         this.processBufferQueue(publisherId);
       }
 
-      if (!publisher.scheduledEnabled && (publisher.mode === 'buffer' || publisher.mode === 'both')) {
-        if (publisher.bufferFlushInterval) {
-          connection.flushTimer = setInterval(() => {
-            this.flushBuffer(publisherId);
-          }, publisher.bufferFlushInterval);
-        }
-      }
-
-      if (publisher.scheduledEnabled && publisher.scheduledInterval && publisher.scheduledIntervalUnit) {
-        this.startScheduledPublishing(publisherId);
-      }
+      const cadence = syncPublisherDeliveryTimers(connection, publisher, {
+        onFlush: () => void this.flushBuffer(publisherId),
+        onScheduledTick: () => void this.performScheduledPublish(publisherId),
+      });
+      console.log(
+        `⏱️  [HTTP PUBLISHER] "${publisher.name}" delivery cadence: ${cadence}${
+          cadence === 'scheduled'
+            ? ` (every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit})`
+            : cadence === 'buffer_flush'
+              ? ` (flush every ${publisher.bufferFlushInterval} ms)`
+              : ''
+        }`
+      );
     } catch (error: any) {
       this.emit('error', publisherId, error);
       this.emit('log', {
@@ -240,9 +243,8 @@ export class HttpClientService extends EventEmitter {
       return;
     }
 
-    if (connection.flushTimer) {
-      clearInterval(connection.flushTimer);
-    }
+    clearPublisherFlushTimer(connection.flushTimer);
+    connection.flushTimer = undefined;
     clearScheduledPublisherTimer(connection.scheduledTimer);
     connection.scheduledTimer = undefined;
 
@@ -362,8 +364,11 @@ export class HttpClientService extends EventEmitter {
     if (!connection || connection.buffer.length === 0) {
       return;
     }
-    if (connection.publisher.scheduledEnabled) {
-      console.log(`   ⏸️  [HTTP PUBLISHER] "${connection.publisher.name}" skipping flushBuffer because scheduled publishing is enabled`);
+    const publisherConfig = this.resolvePublisher(publisherId);
+    if (isScheduledPublishingEnabled(publisherConfig)) {
+      clearPublisherFlushTimer(connection.flushTimer);
+      connection.flushTimer = undefined;
+      connection.buffer.length = 0;
       return;
     }
 
@@ -468,7 +473,7 @@ export class HttpClientService extends EventEmitter {
     }
 
     const publisher = connection.publisher;
-    if (publisher.scheduledEnabled) {
+    if (isScheduledPublishingEnabled(this.resolvePublisher(publisherId))) {
       console.log(`   ⏸️  [HTTP PUBLISHER] "${publisher.name}" skipping processBufferQueue because scheduled publishing is enabled`);
       return;
     }
@@ -542,64 +547,14 @@ export class HttpClientService extends EventEmitter {
 
     const updated = this.db.getPublisherById(publisherId);
     if (updated) {
-      const oldScheduledEnabled = connection.publisher.scheduledEnabled;
-      const oldScheduledInterval = connection.publisher.scheduledInterval;
-      const oldScheduledIntervalUnit = connection.publisher.scheduledIntervalUnit;
       connection.publisher = updated;
       console.log(`Refreshed HTTP publisher configuration for ${updated.name}`);
-      if (connection.flushTimer) {
-        clearInterval(connection.flushTimer);
-        connection.flushTimer = undefined;
-      }
-      if (
-        !updated.scheduledEnabled &&
-        (updated.mode === 'buffer' || updated.mode === 'both') &&
-        updated.bufferFlushInterval
-      ) {
-        connection.flushTimer = setInterval(() => {
-          this.flushBuffer(publisherId);
-        }, updated.bufferFlushInterval);
-      }
-
-      if (isScheduledPublishingEnabled(updated)) {
-        if (
-          !connection.scheduledTimer ||
-          oldScheduledEnabled !== updated.scheduledEnabled ||
-          oldScheduledInterval !== updated.scheduledInterval ||
-          oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
-        ) {
-          this.startScheduledPublishing(publisherId);
-        }
-      } else {
-        clearScheduledPublisherTimer(connection.scheduledTimer);
-        connection.scheduledTimer = undefined;
-      }
+      const cadence = syncPublisherDeliveryTimers(connection, updated, {
+        onFlush: () => void this.flushBuffer(publisherId),
+        onScheduledTick: () => void this.performScheduledPublish(publisherId),
+      });
+      console.log(`⏱️  [HTTP PUBLISHER] "${updated.name}" delivery cadence: ${cadence}`);
     }
-  }
-
-  private startScheduledPublishing(publisherId: string): void {
-    const connection = this.connections.get(publisherId);
-    if (!connection) return;
-    const publisher = connection.publisher;
-    if (!publisher.scheduledEnabled || !publisher.scheduledInterval || !publisher.scheduledIntervalUnit) {
-      return;
-    }
-    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
-    if (!intervalMs) return;
-
-    clearScheduledPublisherTimer(connection.scheduledTimer);
-    connection.scheduledTimer = undefined;
-
-    console.log(
-      `⏰ [HTTP PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
-    );
-
-    const run = () => void this.performScheduledPublish(publisherId);
-    const delayMs = msUntilNextScheduledBoundary(intervalMs);
-    connection.scheduledTimer = setTimeout(() => {
-      run();
-      connection.scheduledTimer = setInterval(run, intervalMs) as unknown as NodeJS.Timeout;
-    }, delayMs) as unknown as NodeJS.Timeout;
   }
 
   private async performScheduledPublish(publisherId: string): Promise<void> {

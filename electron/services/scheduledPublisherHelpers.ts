@@ -17,6 +17,52 @@ export function clearScheduledPublisherTimer(timer?: NodeJS.Timeout): void {
   clearInterval(timer);
 }
 
+export function clearPublisherFlushTimer(flushTimer?: NodeJS.Timeout): void {
+  if (flushTimer === undefined) return;
+  clearInterval(flushTimer);
+}
+
+export interface PublisherTimerHandles {
+  flushTimer?: NodeJS.Timeout;
+  scheduledTimer?: NodeJS.Timeout;
+}
+
+/**
+ * Exactly one delivery cadence: scheduled interval OR buffer flush interval, never both.
+ * Call after connect, start, or refresh when publisher settings change.
+ */
+export function syncPublisherDeliveryTimers(
+  handles: PublisherTimerHandles,
+  publisher: Publisher,
+  callbacks: { onFlush: () => void; onScheduledTick: () => void }
+): 'scheduled' | 'buffer_flush' | 'none' {
+  clearPublisherFlushTimer(handles.flushTimer);
+  handles.flushTimer = undefined;
+  clearScheduledPublisherTimer(handles.scheduledTimer);
+  handles.scheduledTimer = undefined;
+
+  if (isScheduledPublishingEnabled(publisher)) {
+    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+    if (!intervalMs) {
+      return 'none';
+    }
+    const delayMs = msUntilNextScheduledBoundary(intervalMs);
+    const run = () => callbacks.onScheduledTick();
+    handles.scheduledTimer = setTimeout(() => {
+      run();
+      handles.scheduledTimer = setInterval(run, intervalMs) as unknown as NodeJS.Timeout;
+    }, delayMs) as unknown as NodeJS.Timeout;
+    return 'scheduled';
+  }
+
+  if ((publisher.mode === 'buffer' || publisher.mode === 'both') && publisher.bufferFlushInterval) {
+    handles.flushTimer = setInterval(() => callbacks.onFlush(), publisher.bufferFlushInterval);
+    return 'buffer_flush';
+  }
+
+  return 'none';
+}
+
 export function getScheduledIntervalMs(
   interval?: number,
   unit?: 'seconds' | 'minutes' | 'hours'

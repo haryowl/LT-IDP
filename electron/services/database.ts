@@ -2233,7 +2233,7 @@ export class DatabaseService {
       retryAttempts: row.retry_attempts,
       retryDelay: row.retry_delay,
       mappingIds: JSON.parse(row.mapping_ids),
-      scheduledEnabled: row.scheduled_enabled === 1,
+      scheduledEnabled: Number(row.scheduled_enabled ?? 0) === 1,
       scheduledInterval: row.scheduled_interval,
       scheduledIntervalUnit: row.scheduled_interval_unit as 'seconds' | 'minutes' | 'hours' | undefined,
       createdAt: row.created_at,

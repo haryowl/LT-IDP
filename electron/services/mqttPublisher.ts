@@ -6,12 +6,13 @@ import fs from 'fs';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
 import {
+  clearPublisherFlushTimer,
   clearScheduledPublisherTimer,
   collectScheduledPublishBatch,
   computeScheduledPublishWindow,
   getScheduledIntervalMs,
   isScheduledPublishingEnabled,
-  msUntilNextScheduledBoundary,
+  syncPublisherDeliveryTimers,
 } from './scheduledPublisherHelpers';
 
 const log = getLogger();
@@ -196,25 +197,25 @@ export class MqttPublisherService extends EventEmitter {
 
         // Process any pending buffer items from database
         // Skip immediate buffer processing when scheduled publishing is enabled
-        if (!publisher.scheduledEnabled) {
+        if (!isScheduledPublishingEnabled(connection.publisher)) {
           this.processBufferQueue(publisherId);
         } else {
           log.info(`   ⏸️  [MQTT PUBLISHER] Skipping buffer processing on connect because scheduled publishing is enabled`);
         }
 
-        // Start flush timer only when not using schedule (scheduled path sends on interval only)
-        if (!publisher.scheduledEnabled && (publisher.mode === 'buffer' || publisher.mode === 'both')) {
-          if (publisher.bufferFlushInterval) {
-            connection.flushTimer = setInterval(() => {
-              this.flushBuffer(publisherId);
-            }, publisher.bufferFlushInterval);
-          }
-        }
-
-        // Start scheduled publishing if enabled
-        if (publisher.scheduledEnabled && publisher.scheduledInterval && publisher.scheduledIntervalUnit) {
-          this.startScheduledPublishing(publisherId);
-        }
+        const cadence = syncPublisherDeliveryTimers(connection, connection.publisher, {
+          onFlush: () => void this.flushBuffer(publisherId),
+          onScheduledTick: () => void this.performScheduledPublish(publisherId),
+        });
+        log.info(
+          `   ⏱️  [MQTT PUBLISHER] "${connection.publisher.name}" delivery cadence: ${cadence}${
+            cadence === 'scheduled'
+              ? ` (every ${connection.publisher.scheduledInterval} ${connection.publisher.scheduledIntervalUnit})`
+              : cadence === 'buffer_flush'
+                ? ` (flush every ${connection.publisher.bufferFlushInterval} ms)`
+                : ''
+          }`
+        );
       });
 
       // Explicitly handle keepalive timeout event
@@ -326,11 +327,8 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
-    // Stop flush timer
-    if (connection.flushTimer) {
-      clearInterval(connection.flushTimer);
-    }
-
+    clearPublisherFlushTimer(connection.flushTimer);
+    connection.flushTimer = undefined;
     clearScheduledPublisherTimer(connection.scheduledTimer);
     connection.scheduledTimer = undefined;
 
@@ -552,9 +550,11 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
-    // When scheduled publishing is enabled, do not flush the in-memory buffer immediately.
-    if (connection.publisher.scheduledEnabled) {
-      log.info(`   ⏸️  [MQTT PUBLISHER] "${connection.publisher.name}" skipping flushBuffer because scheduled publishing is enabled`);
+    const publisherConfig = this.resolvePublisher(publisherId);
+    if (isScheduledPublishingEnabled(publisherConfig)) {
+      clearPublisherFlushTimer(connection.flushTimer);
+      connection.flushTimer = undefined;
+      connection.buffer.length = 0;
       return;
     }
 
@@ -675,7 +675,7 @@ export class MqttPublisherService extends EventEmitter {
     const publisher = connection.publisher;
     // When scheduled publishing is enabled, do not send buffer items immediately.
     // They will be reconciled by scheduled publishing using historical database values.
-    if (publisher.scheduledEnabled) {
+    if (isScheduledPublishingEnabled(this.resolvePublisher(publisherId))) {
       log.info(`   ⏸️  [MQTT PUBLISHER] Skipping processBufferQueue because scheduled publishing is enabled`);
       return;
     }
@@ -707,37 +707,14 @@ export class MqttPublisherService extends EventEmitter {
         .forEach((item: any) => this.db.deleteBufferItem(item.id));
   }
 
-  private startScheduledPublishing(publisherId: string): void {
+  private syncDeliveryTimers(publisherId: string): void {
     const connection = this.connections.get(publisherId);
-    if (!connection) {
-      return;
-    }
-
-    const publisher = connection.publisher;
-    if (!publisher.scheduledEnabled || !publisher.scheduledInterval || !publisher.scheduledIntervalUnit) {
-      return;
-    }
-
-    // Calculate interval in milliseconds
-    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
-    if (!intervalMs) {
-      log.error(`Invalid scheduled interval unit: ${publisher.scheduledIntervalUnit}`);
-      return;
-    }
-
-    clearScheduledPublisherTimer(connection.scheduledTimer);
-    connection.scheduledTimer = undefined;
-
-    log.info(
-      `⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
-    );
-
-    const run = () => void this.performScheduledPublish(publisherId);
-    const delayMs = msUntilNextScheduledBoundary(intervalMs);
-    connection.scheduledTimer = setTimeout(() => {
-      run();
-      connection.scheduledTimer = setInterval(run, intervalMs) as unknown as NodeJS.Timeout;
-    }, delayMs) as unknown as NodeJS.Timeout;
+    if (!connection) return;
+    const cadence = syncPublisherDeliveryTimers(connection, connection.publisher, {
+      onFlush: () => void this.flushBuffer(publisherId),
+      onScheduledTick: () => void this.performScheduledPublish(publisherId),
+    });
+    log.info(`   ⏱️  [MQTT PUBLISHER] "${connection.publisher.name}" delivery cadence: ${cadence}`);
   }
 
   private async performScheduledPublish(publisherId: string): Promise<void> {
@@ -865,45 +842,10 @@ export class MqttPublisherService extends EventEmitter {
 
     const updated = this.db.getPublisherById(publisherId);
     if (updated) {
-      const oldScheduledEnabled = connection.publisher.scheduledEnabled;
-      const oldScheduledInterval = connection.publisher.scheduledInterval;
-      const oldScheduledIntervalUnit = connection.publisher.scheduledIntervalUnit;
-
       connection.publisher = updated;
       log.info(`Refreshed MQTT publisher configuration for ${updated.name}`);
-
-      // Restart scheduled publishing if configuration changed
       if (connection.client.connected) {
-        clearScheduledPublisherTimer(connection.scheduledTimer);
-        connection.scheduledTimer = undefined;
-
-        if (connection.flushTimer) {
-          clearInterval(connection.flushTimer);
-          connection.flushTimer = undefined;
-        }
-        if (
-          !updated.scheduledEnabled &&
-          (updated.mode === 'buffer' || updated.mode === 'both') &&
-          updated.bufferFlushInterval
-        ) {
-          connection.flushTimer = setInterval(() => {
-            this.flushBuffer(publisherId);
-          }, updated.bufferFlushInterval);
-        }
-
-        if (isScheduledPublishingEnabled(updated)) {
-          if (
-            !connection.scheduledTimer ||
-            oldScheduledEnabled !== updated.scheduledEnabled ||
-            oldScheduledInterval !== updated.scheduledInterval ||
-            oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
-          ) {
-            this.startScheduledPublishing(publisherId);
-          }
-        } else {
-          clearScheduledPublisherTimer(connection.scheduledTimer);
-          connection.scheduledTimer = undefined;
-        }
+        this.syncDeliveryTimers(publisherId);
       }
     }
   }

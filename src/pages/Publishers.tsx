@@ -585,6 +585,12 @@ const Publishers: React.FC = () => {
                     setFormData({ ...formData, bufferSize: parseInt(e.target.value) })
                   }
                   fullWidth
+                  disabled={formData.scheduledEnabled}
+                  helperText={
+                    formData.scheduledEnabled
+                      ? 'Used for storage only while scheduled publishing is on.'
+                      : undefined
+                  }
                 />
                 <TextField
                   label="Buffer Flush Interval (ms)"
@@ -594,6 +600,12 @@ const Publishers: React.FC = () => {
                     setFormData({ ...formData, bufferFlushInterval: parseInt(e.target.value) })
                   }
                   fullWidth
+                  disabled={formData.scheduledEnabled}
+                  helperText={
+                    formData.scheduledEnabled
+                      ? 'Ignored when scheduled publishing is enabled — sends use the schedule interval below.'
+                      : 'How often to flush the in-memory buffer (not used with scheduled publishing).'
+                  }
                 />
               </>
             )}
@@ -698,8 +710,9 @@ const Publishers: React.FC = () => {
                 Scheduled Publishing (from Historical Database)
               </Typography>
               <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-                When enabled, the publisher sends <strong>once per interval</strong> (aligned to clock boundaries, e.g. every 5 minutes).
-                Immediate realtime/buffer sends are disabled. Content depends on <strong>Publishing Mode</strong>:{' '}
+                When enabled, the publisher sends <strong>once per schedule interval</strong> (aligned to clock boundaries, e.g. every 5 minutes).
+                The buffer flush interval is <strong>not used</strong>. Save, then <strong>stop and start</strong> the publisher if it is already running.
+                Content depends on <strong>Publishing Mode</strong>:{' '}
                 <em>Realtime</em> = latest historical value per mapping; <em>Buffer</em> = all samples in that interval from history + queue;{' '}
                 <em>Both</em> = interval samples if any, otherwise latest snapshot.
               </Typography>
