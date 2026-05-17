@@ -4,6 +4,12 @@ import { EventEmitter } from 'events';
 import type { DatabaseService } from './database';
 import type { Publisher, RealtimeData } from '../types';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
+import {
+  collectScheduledPublishBatch,
+  computeScheduledPublishWindow,
+  getScheduledIntervalMs,
+  msUntilNextScheduledBoundary,
+} from './scheduledPublisherHelpers';
 
 interface HttpClientConnection {
   publisher: Publisher;
@@ -191,7 +197,7 @@ export class HttpClientService extends EventEmitter {
 
       this.processBufferQueue(publisherId);
 
-      if (publisher.mode === 'buffer' || publisher.mode === 'both') {
+      if (!publisher.scheduledEnabled && (publisher.mode === 'buffer' || publisher.mode === 'both')) {
         if (publisher.bufferFlushInterval) {
           connection.flushTimer = setInterval(() => {
             this.flushBuffer(publisherId);
@@ -227,6 +233,7 @@ export class HttpClientService extends EventEmitter {
       clearInterval(connection.flushTimer);
     }
     if (connection.scheduledTimer) {
+      clearTimeout(connection.scheduledTimer);
       clearInterval(connection.scheduledTimer);
     }
 
@@ -530,14 +537,38 @@ export class HttpClientService extends EventEmitter {
       const oldScheduledIntervalUnit = connection.publisher.scheduledIntervalUnit;
       connection.publisher = updated;
       console.log(`Refreshed HTTP publisher configuration for ${updated.name}`);
-      if (oldScheduledEnabled !== updated.scheduledEnabled || oldScheduledInterval !== updated.scheduledInterval || oldScheduledIntervalUnit !== updated.scheduledIntervalUnit) {
-        if (connection.scheduledTimer) {
-          clearInterval(connection.scheduledTimer);
-          connection.scheduledTimer = undefined;
-        }
-        if (updated.scheduledEnabled && updated.scheduledInterval && updated.scheduledIntervalUnit) {
+      if (connection.flushTimer) {
+        clearInterval(connection.flushTimer);
+        connection.flushTimer = undefined;
+      }
+      if (
+        !updated.scheduledEnabled &&
+        (updated.mode === 'buffer' || updated.mode === 'both') &&
+        updated.bufferFlushInterval
+      ) {
+        connection.flushTimer = setInterval(() => {
+          this.flushBuffer(publisherId);
+        }, updated.bufferFlushInterval);
+      }
+
+      if (updated.scheduledEnabled && updated.scheduledInterval && updated.scheduledIntervalUnit) {
+        if (
+          !connection.scheduledTimer ||
+          oldScheduledEnabled !== updated.scheduledEnabled ||
+          oldScheduledInterval !== updated.scheduledInterval ||
+          oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
+        ) {
+          if (connection.scheduledTimer) {
+            clearTimeout(connection.scheduledTimer);
+            clearInterval(connection.scheduledTimer);
+            connection.scheduledTimer = undefined;
+          }
           this.startScheduledPublishing(publisherId);
         }
+      } else if (connection.scheduledTimer) {
+        clearTimeout(connection.scheduledTimer);
+        clearInterval(connection.scheduledTimer);
+        connection.scheduledTimer = undefined;
       }
     }
   }
@@ -546,16 +577,22 @@ export class HttpClientService extends EventEmitter {
     const connection = this.connections.get(publisherId);
     if (!connection) return;
     const publisher = connection.publisher;
-    const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+    if (!publisher.scheduledEnabled || !publisher.scheduledInterval || !publisher.scheduledIntervalUnit) {
+      return;
+    }
+    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) return;
 
-    console.log(`⏰ [HTTP PUBLISHER] "${publisher.name}" scheduled publishing started: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit}`);
+    console.log(
+      `⏰ [HTTP PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
+    );
 
-    // Run once immediately and then on interval.
-    this.performScheduledPublish(publisherId);
-    connection.scheduledTimer = setInterval(() => {
-      this.performScheduledPublish(publisherId);
-    }, intervalMs);
+    const run = () => void this.performScheduledPublish(publisherId);
+    const delayMs = msUntilNextScheduledBoundary(intervalMs);
+    connection.scheduledTimer = setTimeout(() => {
+      run();
+      connection.scheduledTimer = setInterval(run, intervalMs) as unknown as NodeJS.Timeout;
+    }, delayMs) as unknown as NodeJS.Timeout;
   }
 
   private async performScheduledPublish(publisherId: string): Promise<void> {
@@ -569,121 +606,30 @@ export class HttpClientService extends EventEmitter {
       publisher.mappingIds.length > 0 ? publisher.mappingIds : mappingsList.map((m) => m.id);
     if (effectiveMappingIds.length === 0) return;
 
-    const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) return;
 
-    const window = this.computeScheduledPublishWindow(publisherId, intervalMs);
+    const window = computeScheduledPublishWindow(this.db, publisherId, intervalMs);
     if (!window) return;
     const { from, to, bucketTs } = window;
 
     try {
-      // A) Realtime snapshot at this schedule bucket timestamp
-      const latestByMapping = this.db.getLatestHistoricalDataForMappings(effectiveMappingIds);
-      if (latestByMapping.size > 0) {
-        const mappings = this.db.getParameterMappings();
-        const mappingById = new Map(mappings.map((m) => [m.id, m]));
-        const snapshot: RealtimeData[] = [];
-        for (const [mappingId, row] of latestByMapping.entries()) {
-          const m = mappingById.get(mappingId);
-          if (!m) continue;
-          snapshot.push({
-            mappingId: row.mappingId,
-            mappingName: m.mappedName,
-            parameterId: m.parameterId,
-            value: row.value,
-            unit: m.unit,
-            timestamp: bucketTs,
-            quality: row.quality,
-          });
-        }
-        if (snapshot.length > 0) {
-          snapshot.sort((a, b) => a.mappingName.localeCompare(b.mappingName));
-          const latestData = snapshot[snapshot.length - 1];
-          let realtimePayload: any;
-          if (publisher.jsonFormat === 'custom' && publisher.customJsonTemplate) {
-            const context = this.buildTemplateContext(publisher, latestData, snapshot);
-            try {
-              realtimePayload = this.renderTemplate(publisher.customJsonTemplate, context);
-            } catch {
-              realtimePayload = this.applyLegacyTemplate(publisher.customJsonTemplate, context);
-            }
-          } else {
-            realtimePayload = {
-              batch: snapshot.map((data) => ({
-                name: data.mappingName,
-                parameterId: data.parameterId,
-                value: data.value,
-                unit: data.unit,
-                timestamp: bucketTs,
-                quality: data.quality,
-              })),
-              count: snapshot.length,
-              timestamp: bucketTs,
-              bucketTs,
-            };
-          }
-          await this.sendRequest(connection, realtimePayload);
-          this.emit('log', {
-            type: 'publisher',
-            level: 'info',
-            message: `Scheduled realtime snapshot: ${snapshot.length} items to ${publisher.httpUrl}`,
-            publisherId,
-            publisherName: publisher.name,
-            timestamp: Date.now(),
-            data: { itemCount: snapshot.length, url: publisher.httpUrl, bucketTs },
-          });
-        }
-      }
-
-      const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), effectiveMappingIds);
-      const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
-      const mappings = this.db.getParameterMappings();
-      const mappingById = new Map(mappings.map((m) => [m.id, m]));
-      const batch: RealtimeData[] = [];
-
-      for (const row of historicalRows) {
-        const mapping = mappingById.get(row.mappingId);
-        if (!mapping) continue;
-        batch.push({
-          mappingId: row.mappingId,
-          mappingName: mapping.mappedName,
-          parameterId: mapping.parameterId,
-          value: row.value,
-          unit: mapping.unit,
-          timestamp: row.timestamp,
-          quality: row.quality,
-        });
-      }
-      for (const item of bufferItems) {
-        const d = item.data as RealtimeData;
-        if (publisher.mappingIds.length > 0 && !publisher.mappingIds.includes(d.mappingId)) continue;
-        batch.push(d);
-      }
-
-      // Deduplicate overlap between historical rows and buffer queue entries.
-      const seen = new Set<string>();
-      const deduped: RealtimeData[] = [];
-      for (const d of batch) {
-        const key = `${d.mappingId}|${d.timestamp}|${JSON.stringify(d.value)}|${d.quality}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(d);
-      }
-      batch.length = 0;
-      batch.push(...deduped);
+      const batch = collectScheduledPublishBatch(
+        this.db,
+        publisher,
+        publisherId,
+        window,
+        effectiveMappingIds
+      );
 
       if (batch.length === 0) {
-        console.log(`   ⚠️  [HTTP PUBLISHER] "${publisher.name}" no data found for window ${new Date(from).toISOString()} - ${new Date(to).toISOString()}`);
+        console.log(
+          `   ⚠️  [HTTP PUBLISHER] "${publisher.name}" no data for scheduled tick (${new Date(from).toISOString()} – ${new Date(to).toISOString()})`
+        );
         this.db.setScheduledPublishCursor(publisherId, to);
         return;
       }
 
-      // Normalize all payload timestamps to same interval bucket timestamp.
-      batch.forEach((d) => {
-        d.timestamp = bucketTs;
-      });
-
-      batch.sort((a, b) => a.timestamp - b.timestamp);
       const latestData = batch[batch.length - 1];
       let payload: any;
       if (publisher.jsonFormat === 'custom' && publisher.customJsonTemplate) {
@@ -708,21 +654,25 @@ export class HttpClientService extends EventEmitter {
           bucketTs,
           from,
           to,
+          mode: publisher.mode,
         };
       }
 
       await this.sendRequest(connection, payload);
-      this.db.markBufferItemsSentInRange(publisherId, from, to);
+
+      if (publisher.mode === 'buffer' || publisher.mode === 'both') {
+        this.db.markBufferItemsSentInRange(publisherId, from, to);
+      }
       this.db.setScheduledPublishCursor(publisherId, to);
 
       this.emit('log', {
         type: 'publisher',
         level: 'info',
-        message: `Scheduled backlog window publish: ${batch.length} items to ${publisher.httpUrl}`,
+        message: `Scheduled publish (${publisher.mode}): ${batch.length} row(s) to ${publisher.httpUrl}`,
         publisherId,
         publisherName: publisher.name,
         timestamp: Date.now(),
-        data: { itemCount: batch.length, url: publisher.httpUrl, from, to, bucketTs },
+        data: { itemCount: batch.length, url: publisher.httpUrl, from, to, bucketTs, mode: publisher.mode },
       });
     } catch (error: any) {
       this.emit('log', {
@@ -737,34 +687,5 @@ export class HttpClientService extends EventEmitter {
     }
   }
 
-  private getScheduledIntervalMs(interval?: number, unit?: 'seconds' | 'minutes' | 'hours'): number | null {
-    if (!interval || interval <= 0 || !unit) return null;
-    switch (unit) {
-      case 'seconds':
-        return interval * 1000;
-      case 'minutes':
-        return interval * 60 * 1000;
-      case 'hours':
-        return interval * 60 * 60 * 1000;
-      default:
-        return null;
-    }
-  }
-
-  /** See mqttPublisher: epoch-aligned window with exclusive end `to` as bucket timestamp. */
-  private computeScheduledPublishWindow(
-    publisherId: string,
-    intervalMs: number
-  ): { from: number; to: number; bucketTs: number } | null {
-    if (intervalMs <= 0) return null;
-    const now = Date.now();
-    let to = Math.ceil(now / intervalMs) * intervalMs;
-    const cursor = this.db.getScheduledPublishCursor(publisherId);
-    const from = cursor !== undefined ? cursor : to - intervalMs;
-    while (to <= from) {
-      to += intervalMs;
-    }
-    return { from, to, bucketTs: to };
-  }
 }
 

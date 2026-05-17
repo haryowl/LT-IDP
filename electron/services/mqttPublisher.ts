@@ -5,6 +5,12 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
+import {
+  collectScheduledPublishBatch,
+  computeScheduledPublishWindow,
+  getScheduledIntervalMs,
+  msUntilNextScheduledBoundary,
+} from './scheduledPublisherHelpers';
 
 const log = getLogger();
 
@@ -187,8 +193,8 @@ export class MqttPublisherService extends EventEmitter {
           log.info(`   ⏸️  [MQTT PUBLISHER] Skipping buffer processing on connect because scheduled publishing is enabled`);
         }
 
-        // Start flush timer if using buffer mode
-        if (publisher.mode === 'buffer' || publisher.mode === 'both') {
+        // Start flush timer only when not using schedule (scheduled path sends on interval only)
+        if (!publisher.scheduledEnabled && (publisher.mode === 'buffer' || publisher.mode === 'both')) {
           if (publisher.bufferFlushInterval) {
             connection.flushTimer = setInterval(() => {
               this.flushBuffer(publisherId);
@@ -316,8 +322,9 @@ export class MqttPublisherService extends EventEmitter {
       clearInterval(connection.flushTimer);
     }
 
-    // Stop scheduled timer
+    // Stop scheduled timer (may be setTimeout before first tick or setInterval)
     if (connection.scheduledTimer) {
+      clearTimeout(connection.scheduledTimer);
       clearInterval(connection.scheduledTimer);
     }
 
@@ -706,21 +713,22 @@ export class MqttPublisherService extends EventEmitter {
     }
 
     // Calculate interval in milliseconds
-    const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+    const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) {
       log.error(`Invalid scheduled interval unit: ${publisher.scheduledIntervalUnit}`);
       return;
     }
 
-    log.info(`⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled publishing started: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit}`);
+    log.info(
+      `⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled publishing: every ${publisher.scheduledInterval} ${publisher.scheduledIntervalUnit} (mode: ${publisher.mode}, one send per tick)`
+    );
 
-    // Perform initial publish immediately
-    this.performScheduledPublish(publisherId);
-
-    // Then set up interval
-    connection.scheduledTimer = setInterval(() => {
-      this.performScheduledPublish(publisherId);
-    }, intervalMs);
+    const run = () => void this.performScheduledPublish(publisherId);
+    const delayMs = msUntilNextScheduledBoundary(intervalMs);
+    connection.scheduledTimer = setTimeout(() => {
+      run();
+      connection.scheduledTimer = setInterval(run, intervalMs) as unknown as NodeJS.Timeout;
+    }, delayMs) as unknown as NodeJS.Timeout;
   }
 
   private async performScheduledPublish(publisherId: string): Promise<void> {
@@ -742,107 +750,39 @@ export class MqttPublisherService extends EventEmitter {
       return;
     }
 
-    log.info(`   ⏰ [MQTT PUBLISHER] "${publisher.name}" performing scheduled publish (realtime + backlog window)`);
+    log.info(
+      `   ⏰ [MQTT PUBLISHER] "${publisher.name}" scheduled tick (mode: ${publisher.mode}, one publish per interval)`
+    );
 
     try {
-      const intervalMs = this.getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
+      const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
       if (!intervalMs) return;
-      const window = this.computeScheduledPublishWindow(publisherId, intervalMs);
+      const window = computeScheduledPublishWindow(this.db, publisherId, intervalMs);
       if (!window) return;
       const { from, to, bucketTs } = window;
 
-      // A) Realtime snapshot at this schedule bucket timestamp
-      const latestByMapping = this.db.getLatestHistoricalDataForMappings(effectiveMappingIds);
-      if (latestByMapping.size > 0) {
-        const mappings = this.db.getParameterMappings();
-        const mapById = new Map(mappings.map((m) => [m.id, m]));
-        const snapshotBatch: RealtimeData[] = [];
-        for (const [mappingId, row] of latestByMapping.entries()) {
-          const m = mapById.get(mappingId);
-          if (!m) continue;
-          snapshotBatch.push({
-            mappingId: row.mappingId,
-            mappingName: m.mappedName,
-            parameterId: m.parameterId,
-            value: row.value,
-            unit: m.unit,
-            timestamp: bucketTs,
-            quality: row.quality,
-          });
-        }
-        if (snapshotBatch.length > 0) {
-          const latestDataItem = snapshotBatch[snapshotBatch.length - 1];
-          const payload = this.formatPayload(publisher, latestDataItem, snapshotBatch, publisherId);
-          await this.sendMessage(connection, payload);
-          this.emit('log', {
-            type: 'publisher',
-            level: 'info',
-            message: `Scheduled realtime snapshot: ${snapshotBatch.length} mappings to topic "${publisher.mqttTopic}"`,
-            publisherId,
-            publisherName: publisher.name,
-            timestamp: Date.now(),
-            data: { mappingCount: snapshotBatch.length, topic: publisher.mqttTopic, bucketTs },
-          });
-        }
-      }
+      const batch = collectScheduledPublishBatch(
+        this.db,
+        publisher,
+        publisherId,
+        window,
+        effectiveMappingIds
+      );
 
-      const historicalRows = this.db.queryHistoricalData(from, Math.max(from, to - 1), effectiveMappingIds);
-      const bufferItems = this.db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
-
-      const mappings = this.db.getParameterMappings();
-      const mappingById = new Map(mappings.map((m) => [m.id, m]));
-      const realtimeDataArray: RealtimeData[] = [];
-
-      for (const row of historicalRows) {
-        const mapping = mappingById.get(row.mappingId);
-        if (!mapping) continue;
-        realtimeDataArray.push({
-          mappingId: row.mappingId,
-          mappingName: mapping.mappedName,
-          parameterId: mapping.parameterId,
-          value: row.value,
-          unit: mapping.unit,
-          timestamp: row.timestamp,
-          quality: row.quality,
-        });
-      }
-      for (const item of bufferItems) {
-        const d = item.data as RealtimeData;
-        if (publisher.mappingIds.length > 0 && !publisher.mappingIds.includes(d.mappingId)) continue;
-        realtimeDataArray.push(d);
-      }
-
-      // Deduplicate overlap between historical rows and buffer queue entries.
-      const seen = new Set<string>();
-      const deduped: RealtimeData[] = [];
-      for (const d of realtimeDataArray) {
-        const key = `${d.mappingId}|${d.timestamp}|${JSON.stringify(d.value)}|${d.quality}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(d);
-      }
-      realtimeDataArray.length = 0;
-      realtimeDataArray.push(...deduped);
-
-      if (realtimeDataArray.length === 0) {
-        log.info(`   ⚠️  [MQTT PUBLISHER] "${publisher.name}" no data found for window ${new Date(from).toISOString()} - ${new Date(to).toISOString()}`);
+      if (batch.length === 0) {
+        log.info(
+          `   ⚠️  [MQTT PUBLISHER] "${publisher.name}" no data for scheduled tick (${new Date(from).toISOString()} – ${new Date(to).toISOString()})`
+        );
         this.db.setScheduledPublishCursor(publisherId, to);
         return;
       }
 
-      // Normalize all payload timestamps to the same interval bucket timestamp.
-      realtimeDataArray.forEach((d) => {
-        d.timestamp = bucketTs;
-      });
+      log.info(
+        `   📊 [MQTT PUBLISHER] "${publisher.name}" scheduled batch: ${batch.length} row(s), mode=${publisher.mode}`
+      );
 
-      realtimeDataArray.sort((a, b) => a.timestamp - b.timestamp);
-      log.info(`   📊 [MQTT PUBLISHER] "${publisher.name}" window rows: ${realtimeDataArray.length} (${new Date(from).toISOString()} - ${new Date(to).toISOString()})`);
-
-      // Use the latest timestamp as the "current" data for template context
-      const latestDataItem = realtimeDataArray[realtimeDataArray.length - 1];
-
-      // Format payload using all the data
-      const payload = this.formatPayload(publisher, latestDataItem, realtimeDataArray, publisherId);
+      const latestDataItem = batch[batch.length - 1];
+      const payload = this.formatPayload(publisher, latestDataItem, batch, publisherId);
 
       log.info(`   📄 [MQTT PUBLISHER] "${publisher.name}" Scheduled JSON Payload:`);
       try {
@@ -855,34 +795,35 @@ export class MqttPublisherService extends EventEmitter {
         log.info(`      ${payloadPreview.split('\n').join('\n      ')}`);
       }
 
-      // Send the payload
       await this.sendMessage(connection, payload);
-      log.info(`   ✅ [MQTT PUBLISHER] "${publisher.name}" SUCCESSFULLY PUBLISHED scheduled data (${realtimeDataArray.length} mappings)`);
+      log.info(`   ✅ [MQTT PUBLISHER] "${publisher.name}" scheduled publish OK (${batch.length} row(s))`);
 
-      // Reconcile buffer queue only for the sent window [from, to)
-      try {
-        const cleared = this.db.markBufferItemsSentInRange(publisherId, from, to);
-        if (cleared > 0) {
-          log.info(`   🧹 [MQTT PUBLISHER] "${publisher.name}" reconciled buffer queue: marked ${cleared} items as sent in window`);
+      if (publisher.mode === 'buffer' || publisher.mode === 'both') {
+        try {
+          const cleared = this.db.markBufferItemsSentInRange(publisherId, from, to);
+          if (cleared > 0) {
+            log.info(`   🧹 [MQTT PUBLISHER] "${publisher.name}" reconciled buffer queue: ${cleared} item(s)`);
+          }
+        } catch (err: any) {
+          log.warn(`   ⚠️  [MQTT PUBLISHER] Buffer reconciliation warning: ${err.message}`);
         }
-      } catch (err: any) {
-        log.warn(`   ⚠️  [MQTT PUBLISHER] Buffer reconciliation warning: ${err.message}`);
       }
       this.db.setScheduledPublishCursor(publisherId, to);
 
       this.emit('log', {
         type: 'publisher',
         level: 'info',
-        message: `Scheduled backlog window publish: ${realtimeDataArray.length} rows to topic "${publisher.mqttTopic}"`,
+        message: `Scheduled publish (${publisher.mode}): ${batch.length} row(s) to topic "${publisher.mqttTopic}"`,
         publisherId,
         publisherName: publisher.name,
         timestamp: Date.now(),
         data: {
-          rowCount: realtimeDataArray.length,
+          rowCount: batch.length,
           topic: publisher.mqttTopic,
           from,
           to,
           bucketTs,
+          mode: publisher.mode,
         },
       });
     } catch (error: any) {
@@ -897,40 +838,6 @@ export class MqttPublisherService extends EventEmitter {
         error: error.message,
       });
     }
-  }
-
-  private getScheduledIntervalMs(interval?: number, unit?: 'seconds' | 'minutes' | 'hours'): number | null {
-    if (!interval || interval <= 0 || !unit) return null;
-    switch (unit) {
-      case 'seconds':
-        return interval * 1000;
-      case 'minutes':
-        return interval * 60 * 1000;
-      case 'hours':
-        return interval * 60 * 60 * 1000;
-      default:
-        return null;
-    }
-  }
-
-  /**
-   * Next aligned window [from, to) where `to` is an epoch-aligned boundary strictly after `from`
-   * (fixes timer firing on the same boundary as the cursor, which skipped every other interval).
-   * Payload bucket timestamp = `to` (exclusive end of the window).
-   */
-  private computeScheduledPublishWindow(
-    publisherId: string,
-    intervalMs: number
-  ): { from: number; to: number; bucketTs: number } | null {
-    if (intervalMs <= 0) return null;
-    const now = Date.now();
-    let to = Math.ceil(now / intervalMs) * intervalMs;
-    const cursor = this.db.getScheduledPublishCursor(publisherId);
-    const from = cursor !== undefined ? cursor : to - intervalMs;
-    while (to <= from) {
-      to += intervalMs;
-    }
-    return { from, to, bucketTs: to };
   }
 
   refreshPublisher(publisherId: string): void {
@@ -956,16 +863,38 @@ export class MqttPublisherService extends EventEmitter {
           connection.scheduledTimer = undefined;
         }
 
-        // Start scheduled publishing if enabled and configuration changed
+        if (connection.flushTimer) {
+          clearInterval(connection.flushTimer);
+          connection.flushTimer = undefined;
+        }
         if (
-          updated.scheduledEnabled &&
-          updated.scheduledInterval &&
-          updated.scheduledIntervalUnit &&
-          (oldScheduledEnabled !== updated.scheduledEnabled ||
-            oldScheduledInterval !== updated.scheduledInterval ||
-            oldScheduledIntervalUnit !== updated.scheduledIntervalUnit)
+          !updated.scheduledEnabled &&
+          (updated.mode === 'buffer' || updated.mode === 'both') &&
+          updated.bufferFlushInterval
         ) {
-          this.startScheduledPublishing(publisherId);
+          connection.flushTimer = setInterval(() => {
+            this.flushBuffer(publisherId);
+          }, updated.bufferFlushInterval);
+        }
+
+        if (updated.scheduledEnabled && updated.scheduledInterval && updated.scheduledIntervalUnit) {
+          if (
+            !connection.scheduledTimer ||
+            oldScheduledEnabled !== updated.scheduledEnabled ||
+            oldScheduledInterval !== updated.scheduledInterval ||
+            oldScheduledIntervalUnit !== updated.scheduledIntervalUnit
+          ) {
+            if (connection.scheduledTimer) {
+              clearTimeout(connection.scheduledTimer);
+              clearInterval(connection.scheduledTimer);
+              connection.scheduledTimer = undefined;
+            }
+            this.startScheduledPublishing(publisherId);
+          }
+        } else if (connection.scheduledTimer) {
+          clearTimeout(connection.scheduledTimer);
+          clearInterval(connection.scheduledTimer);
+          connection.scheduledTimer = undefined;
         }
       }
     }

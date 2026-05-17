@@ -698,8 +698,10 @@ const Publishers: React.FC = () => {
                 Scheduled Publishing (from Historical Database)
               </Typography>
               <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-                When enabled, publisher will read latest values from historical database and publish on a schedule.
-                Realtime/buffer publishing will be disabled when scheduled publishing is enabled.
+                When enabled, the publisher sends <strong>once per interval</strong> (aligned to clock boundaries, e.g. every 5 minutes).
+                Immediate realtime/buffer sends are disabled. Content depends on <strong>Publishing Mode</strong>:{' '}
+                <em>Realtime</em> = latest historical value per mapping; <em>Buffer</em> = all samples in that interval from history + queue;{' '}
+                <em>Both</em> = interval samples if any, otherwise latest snapshot.
               </Typography>
               <FormControlLabel
                 control={
