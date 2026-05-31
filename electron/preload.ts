@@ -140,6 +140,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('sparing:sendNow', hourTimestamp),
     getStatus: () => ipcRenderer.invoke('sparing:getStatus'),
   },
+  tmat: {
+    getConfig: () => ipcRenderer.invoke('tmat:getConfig'),
+    updateConfig: (config: any) => ipcRenderer.invoke('tmat:updateConfig', config),
+    getMappings: () => ipcRenderer.invoke('tmat:getMappings'),
+    upsertMapping: (tmatParam: string, mappingId: string) =>
+      ipcRenderer.invoke('tmat:upsertMapping', tmatParam, mappingId),
+    deleteMapping: (id: string) => ipcRenderer.invoke('tmat:deleteMapping', id),
+    getLogs: (limit?: number) => ipcRenderer.invoke('tmat:getLogs', limit),
+    processQueue: () => ipcRenderer.invoke('tmat:processQueue'),
+    getQueueItems: (limit?: number) => ipcRenderer.invoke('tmat:getQueueItems', limit),
+    sendNow: () => ipcRenderer.invoke('tmat:sendNow'),
+    getStatus: () => ipcRenderer.invoke('tmat:getStatus'),
+  },
   emailNotifications: {
     get: () => ipcRenderer.invoke('emailNotifications:get'),
     save: (body: any) => ipcRenderer.invoke('emailNotifications:save', body),

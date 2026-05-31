@@ -402,6 +402,68 @@ export interface SparingJwtPayload {
   [key: string]: string | number;
 }
 
+/** KLH TMAT API body fields (Monitoring TMAT v1.2). */
+export const TMAT_BODY_PARAMS = [
+  'tmat_value',
+  'hujan_value',
+  'kelembapan_tanah',
+  'suhu_value',
+  'ph_value',
+  'baterai_value',
+  'tss_value',
+] as const;
+
+export type TmatBodyParam = (typeof TMAT_BODY_PARAMS)[number];
+export type TmatQueueStatus = 'pending' | 'sending' | 'sent' | 'failed';
+
+export interface TmatConfig {
+  id: string;
+  deviceIdUnik: string;
+  apiKey?: string;
+  apiUrl?: string;
+  enabled: boolean;
+  pushIntervalSeconds: number;
+  lastSend?: number;
+  retryMaxAttempts?: number;
+  retryIntervalMinutes?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TmatMapping {
+  id: string;
+  mappingId: string;
+  tmatParam: TmatBodyParam;
+  enabled: boolean;
+  createdAt: number;
+}
+
+export interface TmatQueue {
+  id: string;
+  payload: string;
+  status: TmatQueueStatus;
+  retryCount: number;
+  lastAttemptAt?: number;
+  errorMessage?: string;
+  createdAt: number;
+  sentAt?: number;
+}
+
+export interface TmatLog {
+  id: string;
+  status: 'success' | 'failed';
+  response?: string;
+  durationMs?: number;
+  timestamp: number;
+}
+
+export interface TmatApiResponse {
+  status: boolean;
+  message?: string;
+  insert_id?: number;
+  timestamp?: string;
+}
+
 export interface SparingApiResponse {
   status: string;
   message?: string;

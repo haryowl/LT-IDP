@@ -58,6 +58,7 @@ const menuItems: MenuItem[] = [
   { text: 'Monitoring', icon: <MonitorIcon />, path: '/monitoring' },
   { text: 'Historical Data', icon: <HistoryIcon />, path: '/historical' },
   { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', roles: ['admin', 'guest'] },
+  { text: 'TMAT (KLH)', icon: <CloudUploadIcon />, path: '/tmat', roles: ['admin', 'guest'] },
   { text: 'Email notifications', icon: <EmailIcon />, path: '/email-notifications', roles: ['admin'] },
   { text: 'Log Terminal', icon: <TerminalIcon />, path: '/log-terminal' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
@@ -71,12 +72,12 @@ const Layout: React.FC = () => {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   const visibleMenuItems = menuItems.filter((item) => {
-    if (role === 'guest') return item.path === '/sparing';
+    if (role === 'guest') return item.path === '/sparing' || item.path === '/tmat';
     return !item.roles || (role && item.roles.includes(role));
   });
 
   useEffect(() => {
-    if (role === 'guest' && location.pathname !== '/sparing') {
+    if (role === 'guest' && location.pathname !== '/sparing' && location.pathname !== '/tmat') {
       navigate('/sparing');
     }
   }, [role, location.pathname, navigate]);

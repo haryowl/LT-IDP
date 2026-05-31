@@ -17,6 +17,7 @@ import { MqttBrokerService } from '../electron/services/mqttBroker';
 import { HttpClientService } from '../electron/services/httpClient';
 import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
+import { TmatService } from '../electron/services/tmatService';
 import { EmailNotificationService } from '../electron/services/emailNotificationService';
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { AdvancedRulesService } from '../electron/services/advancedRulesService';
@@ -344,6 +345,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let tmatService: TmatService;
 let emailNotificationService!: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 let gnssService: GnssService;
@@ -375,7 +377,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   // This protects the backend even if someone tries to call other endpoints directly.
   if ((result.user as any)?.role === 'guest') {
     const url = req.originalUrl || req.url || '';
-    if (!String(url).startsWith('/api/sparing')) {
+    if (!String(url).startsWith('/api/sparing') && !String(url).startsWith('/api/tmat')) {
       return res.status(403).json({ error: 'Forbidden' });
     }
   }
@@ -1137,6 +1139,36 @@ app.get('/api/sparing/status', authMiddleware, sparingRoleMiddleware, (req, res)
   });
 });
 
+// ---------- TMAT (KLH Monitoring API v1.2) ----------
+app.get('/api/tmat/config', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(tmatService.getTmatConfig()));
+app.post('/api/tmat/config', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  const updated = tmatService.upsertTmatConfig(req.body);
+  if (req.body?.enabled !== undefined || req.body?.pushIntervalSeconds !== undefined || req.body?.retryIntervalMinutes !== undefined) {
+    tmatService.stopScheduler();
+    if (updated?.enabled) tmatService.startScheduler();
+  }
+  res.json(updated);
+});
+app.get('/api/tmat/mappings', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(tmatService.getTmatMappings()));
+app.post('/api/tmat/mappings', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  const { tmatParam, mappingId } = req.body || {};
+  tmatService.upsertTmatMapping(tmatParam, mappingId);
+  res.json({ ok: true });
+});
+app.delete('/api/tmat/mappings/:id', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  tmatService.deleteTmatMapping(req.params.id);
+  res.json({ ok: true });
+});
+app.get('/api/tmat/logs', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(tmatService.getTmatLogs(Number(req.query.limit) || 50)));
+app.post('/api/tmat/process-queue', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  tmatService.processQueue().then(() => res.json({ ok: true }));
+});
+app.get('/api/tmat/queue', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(tmatService.getQueueItems(Number(req.query.limit) || 100)));
+app.post('/api/tmat/send-now', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  tmatService.sendNow().then(() => res.json({ ok: true })).catch((e) => res.status(400).json({ error: e?.message }));
+});
+app.get('/api/tmat/status', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(tmatService.getStatus()));
+
 app.get('/api/email-notifications', authMiddleware, (req, res) => {
   res.json(emailNotificationService.getSettingsForApi());
 });
@@ -1254,6 +1286,7 @@ server.on('upgrade', (req, socket, head) => {
   await gnssService.applyConfig(getGnssConfig());
   dataMapperService = new DataMapperService(dbService, gnssService);
   sparingService = new SparingService(dbService);
+  tmatService = new TmatService(dbService);
   emailNotificationService = new EmailNotificationService(dbService, () => logger.getCurrentLogFile());
   sparingService.setSendLoggedCallback((info) => {
     void emailNotificationService.onSparingSendLogged(info);
@@ -1330,6 +1363,12 @@ server.on('upgrade', (req, socket, head) => {
   if (sparingConfig?.enabled) {
     sparingService.startHourlyScheduler();
     logger.info('SPARING scheduler started');
+  }
+
+  const tmatConfig = tmatService.getTmatConfig();
+  if (tmatConfig?.enabled) {
+    tmatService.startScheduler();
+    logger.info('TMAT scheduler started');
   }
 
   const publishers = dbService.getPublishers().filter((p: any) => p.enabled && p.autoStart);

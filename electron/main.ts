@@ -10,6 +10,7 @@ import { HttpClientService } from './services/httpClient';
 import { DataMapperService } from './services/dataMapper';
 import { AuthService } from './services/auth';
 import { SparingService } from './services/sparingService';
+import { TmatService } from './services/tmatService';
 import { EmailNotificationService } from './services/emailNotificationService';
 import { ThresholdPublishService } from './services/thresholdPublish';
 import { getSystemInfo } from './services/systemInfo';
@@ -53,6 +54,7 @@ let mqttBrokerService: MqttBrokerService;
 let httpClientService: HttpClientService;
 let dataMapperService: DataMapperService;
 let sparingService: SparingService;
+let tmatService: TmatService;
 let emailNotificationService: EmailNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 
@@ -95,6 +97,7 @@ async function initializeServices() {
   httpClientService = new HttpClientService(dbService);
   dataMapperService = new DataMapperService(dbService);
   sparingService = new SparingService(dbService);
+  tmatService = new TmatService(dbService);
   emailNotificationService = new EmailNotificationService(dbService, () => getLogger().getCurrentLogFile());
   sparingService.setSendLoggedCallback((info) => {
     void emailNotificationService.onSparingSendLogged(info);
@@ -110,6 +113,12 @@ async function initializeServices() {
   if (sparingConfig && sparingConfig.enabled) {
     sparingService.startHourlyScheduler();
     logger.info('SPARING scheduler started');
+  }
+
+  const tmatConfig = tmatService.getTmatConfig();
+  if (tmatConfig?.enabled) {
+    tmatService.startScheduler();
+    logger.info('TMAT scheduler started');
   }
 
   // Start MQTT Publisher health check (every 5 minutes)
@@ -846,6 +855,38 @@ function setupIpcHandlers() {
     };
   });
 
+  // ============================================================================
+  // TMAT (KLH Monitoring API v1.2) IPC Handlers
+  // ============================================================================
+  ipcMain.handle('tmat:getConfig', async () => tmatService.getTmatConfig());
+  ipcMain.handle('tmat:updateConfig', async (_, config) => {
+    const updated = tmatService.upsertTmatConfig(config);
+    if (config.enabled !== undefined || config.pushIntervalSeconds !== undefined || config.retryIntervalMinutes !== undefined) {
+      tmatService.stopScheduler();
+      if (updated.enabled) tmatService.startScheduler();
+    }
+    return updated;
+  });
+  ipcMain.handle('tmat:getMappings', async () => tmatService.getTmatMappings());
+  ipcMain.handle('tmat:upsertMapping', async (_, tmatParam, mappingId) =>
+    tmatService.upsertTmatMapping(tmatParam, mappingId)
+  );
+  ipcMain.handle('tmat:deleteMapping', async (_, id) => {
+    tmatService.deleteTmatMapping(id);
+    return { success: true };
+  });
+  ipcMain.handle('tmat:getLogs', async (_, limit) => tmatService.getTmatLogs(limit || 50));
+  ipcMain.handle('tmat:processQueue', async () => {
+    await tmatService.processQueue();
+    return { success: true };
+  });
+  ipcMain.handle('tmat:getQueueItems', async (_, limit) => tmatService.getQueueItems(limit || 100));
+  ipcMain.handle('tmat:sendNow', async () => {
+    await tmatService.sendNow();
+    return { success: true };
+  });
+  ipcMain.handle('tmat:getStatus', async () => tmatService.getStatus());
+
   ipcMain.handle('emailNotifications:get', async () => emailNotificationService.getSettingsForApi());
   ipcMain.handle('emailNotifications:save', async (_, body) => {
     emailNotificationService.saveSettings(body || {});
@@ -873,6 +914,7 @@ app.on('window-all-closed', () => {
   httpClientService?.cleanup();
   thresholdPublishService?.cleanup();
   sparingService?.stopHourlyScheduler();
+  tmatService?.stopScheduler();
   dbService?.close();
   logger.cleanup();
 

@@ -256,6 +256,25 @@ export const api = {
         : request('POST', '/system/read-only-token/regenerate'),
   },
   sparing: { getConfig: () => (isElectron ? (window as any).electronAPI.sparing.getConfig() : request('GET', '/sparing/config')), updateConfig: (c: any) => (isElectron ? (window as any).electronAPI.sparing.updateConfig(c) : request('POST', '/sparing/config', c)), fetchApiSecret: () => (isElectron ? (window as any).electronAPI.sparing.fetchApiSecret() : request('POST', '/sparing/fetch-api-secret')), getMappings: () => (isElectron ? (window as any).electronAPI.sparing.getMappings() : request('GET', '/sparing/mappings')), upsertMapping: (sparingParam: string, mappingId: string) => (isElectron ? (window as any).electronAPI.sparing.upsertMapping(sparingParam, mappingId) : request('POST', '/sparing/mappings', { sparingParam, mappingId })), deleteMapping: (id: string) => (isElectron ? (window as any).electronAPI.sparing.deleteMapping(id) : request('DELETE', `/sparing/mappings/${id}`)), getLogs: (limit?: number) => (isElectron ? (window as any).electronAPI.sparing.getLogs(limit) : request('GET', `/sparing/logs?limit=${limit ?? 50}`)), exportLog: (date?: string) => (isElectron ? (window as any).electronAPI.sparing.exportLog(date) : request('GET', `/sparing/export-log${date ? `?date=${encodeURIComponent(date)}` : ''}`)), processQueue: () => (isElectron ? (window as any).electronAPI.sparing.processQueue() : request('POST', '/sparing/process-queue')), getQueueItems: (limit?: number) => (isElectron ? (window as any).electronAPI.sparing.getQueueItems(limit) : request('GET', `/sparing/queue?limit=${limit ?? 100}`)), sendNow: (hourTimestamp?: number) => (isElectron ? (window as any).electronAPI.sparing.sendNow(hourTimestamp) : request('POST', '/sparing/send-now', { hourTimestamp })), getStatus: () => (isElectron ? (window as any).electronAPI.sparing.getStatus() : request('GET', '/sparing/status')) },
+  tmat: {
+    getConfig: () => (isElectron ? (window as any).electronAPI.tmat.getConfig() : request('GET', '/tmat/config')),
+    updateConfig: (c: any) => (isElectron ? (window as any).electronAPI.tmat.updateConfig(c) : request('POST', '/tmat/config', c)),
+    getMappings: () => (isElectron ? (window as any).electronAPI.tmat.getMappings() : request('GET', '/tmat/mappings')),
+    upsertMapping: (tmatParam: string, mappingId: string) =>
+      isElectron
+        ? (window as any).electronAPI.tmat.upsertMapping(tmatParam, mappingId)
+        : request('POST', '/tmat/mappings', { tmatParam, mappingId }),
+    deleteMapping: (id: string) =>
+      isElectron ? (window as any).electronAPI.tmat.deleteMapping(id) : request('DELETE', `/tmat/mappings/${id}`),
+    getLogs: (limit?: number) =>
+      isElectron ? (window as any).electronAPI.tmat.getLogs(limit) : request('GET', `/tmat/logs?limit=${limit ?? 50}`),
+    processQueue: () =>
+      isElectron ? (window as any).electronAPI.tmat.processQueue() : request('POST', '/tmat/process-queue'),
+    getQueueItems: (limit?: number) =>
+      isElectron ? (window as any).electronAPI.tmat.getQueueItems(limit) : request('GET', `/tmat/queue?limit=${limit ?? 100}`),
+    sendNow: () => (isElectron ? (window as any).electronAPI.tmat.sendNow() : request('POST', '/tmat/send-now')),
+    getStatus: () => (isElectron ? (window as any).electronAPI.tmat.getStatus() : request('GET', '/tmat/status')),
+  },
   emailNotifications: {
     get: () =>
       isElectron

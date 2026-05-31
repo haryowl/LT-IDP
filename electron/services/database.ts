@@ -721,6 +721,58 @@ export class DatabaseService {
       ON sparing_mappings(sparing_param);
     `);
 
+    // KLH TMAT (Monitoring TMAT API v1.2)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tmat_config (
+        id TEXT PRIMARY KEY,
+        device_id_unik TEXT NOT NULL,
+        api_key TEXT,
+        api_url TEXT,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        push_interval_seconds INTEGER NOT NULL DEFAULT 60,
+        last_send INTEGER,
+        retry_max_attempts INTEGER,
+        retry_interval_minutes INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tmat_mappings (
+        id TEXT PRIMARY KEY,
+        tmat_param TEXT NOT NULL,
+        mapping_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tmat_queue (
+        id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sending', 'sent', 'failed')),
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at INTEGER,
+        error_message TEXT,
+        created_at INTEGER NOT NULL,
+        sent_at INTEGER
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tmat_logs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK(status IN ('success', 'failed')),
+        response TEXT,
+        duration_ms INTEGER,
+        timestamp INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tmat_queue_status ON tmat_queue(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_tmat_logs_timestamp ON tmat_logs(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_tmat_mappings_param ON tmat_mappings(tmat_param);
+    `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS email_notification_settings (
         id TEXT PRIMARY KEY,

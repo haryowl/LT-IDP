@@ -16,13 +16,14 @@ import AdvancedRules from './pages/AdvancedRules';
 import Monitoring from './pages/Monitoring';
 import HistoricalData from './pages/HistoricalData';
 import SparingConfig from './pages/SparingConfig';
+import TmatConfig from './pages/TmatConfig';
 import MqttBroker from './pages/MqttBroker';
 import LogTerminal from './pages/LogTerminal';
 import Settings from './pages/Settings';
 import EmailNotifications from './pages/EmailNotifications';
 import PublicDashboard from './pages/PublicDashboard';
 
-function SparingGuard({ children }: { children: React.ReactNode }) {
+function KlhGuard({ children }: { children: React.ReactNode }) {
   const role = useAuthStore((state) => state.role);
   if (role !== 'admin' && role !== 'guest') return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -97,7 +98,8 @@ function App() {
           <Route path="advanced-rules" element={<AdvancedRules />} />
           <Route path="monitoring" element={<Monitoring />} />
           <Route path="historical" element={<HistoricalData />} />
-          <Route path="sparing" element={<SparingGuard><SparingConfig /></SparingGuard>} />
+          <Route path="sparing" element={<KlhGuard><SparingConfig /></KlhGuard>} />
+          <Route path="tmat" element={<KlhGuard><TmatConfig /></KlhGuard>} />
           <Route path="email-notifications" element={<AdminGuard><EmailNotifications /></AdminGuard>} />
           <Route path="mqtt-broker" element={<MqttBroker />} />
           <Route path="log-terminal" element={<LogTerminal />} />
