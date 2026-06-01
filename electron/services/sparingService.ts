@@ -39,7 +39,7 @@ export class SparingService {
     const SECRET_URL = (cfg?.apiSecretUrl && cfg.apiSecretUrl.trim()) ? cfg.apiSecretUrl.trim() : `${base}/secret-sensor`;
     const TESTING_URL = (cfg?.apiTestingUrl && cfg.apiTestingUrl.trim()) ? cfg.apiTestingUrl.trim() : `${base}/testing`;
     const SEND_2MIN_URL = (cfg?.apiSend2MinUrl && cfg.apiSend2MinUrl.trim()) ? cfg.apiSend2MinUrl.trim() : `${base}/send`;
-    const SEND_HOURLY_URL = (cfg?.apiSendHourlyUrl && cfg.apiSendHourlyUrl.trim()) ? cfg.apiSendHourlyUrl.trim() : `${base}/send-hourly-vendor`;
+    const SEND_HOURLY_URL = (cfg?.apiSendHourlyUrl && cfg.apiSendHourlyUrl.trim()) ? cfg.apiSendHourlyUrl.trim() : `${base}/send-hourly`;
     return { SECRET_URL, TESTING_URL, SEND_2MIN_URL, SEND_HOURLY_URL, BASE: base };
   }
 
