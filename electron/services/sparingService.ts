@@ -64,7 +64,7 @@ export class SparingService {
       apiSendHourlyUrl: row.api_send_hourly_url || undefined,
       apiSend2MinUrl: row.api_send_2min_url || undefined,
       apiTestingUrl: row.api_testing_url || undefined,
-      apiSecret: row.api_secret,
+      apiSecret: row.api_secret ? this.normalizeApiSecret(row.api_secret) : undefined,
       apiSecretFetchedAt: row.api_secret_fetched_at,
       enabled: Boolean(row.enabled),
       sendMode: row.send_mode,
@@ -166,18 +166,44 @@ export class SparingService {
     }
   }
 
+  /** Strip whitespace and surrounding quotes from secret API responses. */
+  private normalizeApiSecret(raw: string): string {
+    let secret = String(raw ?? '').trim();
+    if (
+      secret.length >= 2 &&
+      ((secret.startsWith('"') && secret.endsWith('"')) ||
+        (secret.startsWith("'") && secret.endsWith("'")))
+    ) {
+      secret = secret.slice(1, -1).trim();
+    }
+    return secret;
+  }
+
+  private parseApiSecretResponse(response: string): string {
+    const trimmed = String(response).trim();
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        return this.normalizeApiSecret(parsed);
+      }
+      if (parsed && typeof parsed === 'object') {
+        const fromField = parsed.secret ?? parsed.api_secret;
+        if (fromField != null && String(fromField).length > 0) {
+          return this.normalizeApiSecret(String(fromField));
+        }
+      }
+    } catch {
+      // plain text body
+    }
+    return this.normalizeApiSecret(trimmed);
+  }
+
   async fetchApiSecret(): Promise<string> {
     try {
       getLogger().info('Fetching SPARING API Secret from KLHK...');
       const { SECRET_URL } = this.getApiUrls();
       const response = await this.httpRequest(SECRET_URL, 'GET', undefined, { acceptText: true });
-      let apiSecret: string;
-      try {
-        const obj = JSON.parse(response);
-        apiSecret = obj.secret || obj.api_secret || String(response).trim();
-      } catch {
-        apiSecret = String(response).trim();
-      }
+      const apiSecret = this.parseApiSecretResponse(response);
 
       this.upsertSparingConfig({
         apiSecret: apiSecret,
@@ -263,6 +289,7 @@ export class SparingService {
 
   encryptJWT(payload: any, apiSecret: string): string {
     try {
+      const secret = this.normalizeApiSecret(apiSecret);
       const header = {
         typ: 'JWT',
         alg: 'HS256',
@@ -274,7 +301,7 @@ export class SparingService {
       const dataToSign = `${encodedHeader}.${encodedPayload}`;
 
       const signature = crypto
-        .createHmac('sha256', apiSecret)
+        .createHmac('sha256', secret)
         .update(dataToSign)
         .digest('base64')
         .replace(/\+/g, '-')
