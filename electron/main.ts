@@ -843,6 +843,15 @@ function setupIpcHandlers() {
     return await sparingService.retryAllPendingAndFailed();
   });
 
+  ipcMain.handle('sparing:deleteQueueItem', async (_, id: string) => {
+    sparingService.deleteQueueItem(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('sparing:deletePendingAndFailedQueueItems', async () => {
+    return sparingService.deletePendingAndFailedQueueItems();
+  });
+
   // Manual Send (for testing)
   ipcMain.handle('sparing:sendNow', async (_, hourTimestamp) => {
     await sparingService.sendNow(hourTimestamp);

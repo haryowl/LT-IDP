@@ -88,6 +88,8 @@ const SparingConfig: React.FC = () => {
   const [status, setStatus] = useState<{ enabled: boolean; sendMode: string; queueDepth: number; lastHourlySend?: number | null; last2MinSend?: number | null; nextRuns?: any }>({ enabled: false, sendMode: 'hourly', queueDepth: 0 });
   const [retryingItemId, setRetryingItemId] = useState<string | null>(null);
   const [retryingAll, setRetryingAll] = useState(false);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [clearingQueue, setClearingQueue] = useState(false);
 
   useEffect(() => {
     loadConfig();
@@ -281,6 +283,57 @@ const SparingConfig: React.FC = () => {
       await loadQueueItems();
     } finally {
       setRetryingItemId(null);
+    }
+  };
+
+  const handleDeleteQueueItem = async (id: string) => {
+    if (!window.confirm('Remove this queue item? It will not be sent to KLHK.')) return;
+
+    try {
+      setDeletingItemId(id);
+      setError('');
+      await api.sparing?.deleteQueueItem(id);
+      setSuccess('Queue item removed');
+      setTimeout(() => setSuccess(''), 3000);
+      await loadQueueItems();
+      await loadStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to remove queue item');
+    } finally {
+      setDeletingItemId(null);
+    }
+  };
+
+  const handleClearPendingAndFailed = async () => {
+    const pendingFailedCount = queueItems.filter((item) =>
+      item.status === 'pending' || item.status === 'failed' || item.status === 'sending'
+    ).length;
+    if (pendingFailedCount === 0) {
+      setError('No pending, failed, or sending queue items to remove');
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Remove all ${pendingFailedCount} pending, failed, and sending queue item(s)? They will not be sent to KLHK.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setClearingQueue(true);
+      setError('');
+      const result = await api.sparing?.deletePendingAndFailedQueueItems();
+      const deleted = result?.deleted ?? 0;
+      setSuccess(`Removed ${deleted} queue item(s)`);
+      setTimeout(() => setSuccess(''), 3000);
+      await loadQueueItems();
+      await loadStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to clear queue items');
+    } finally {
+      setClearingQueue(false);
     }
   };
 
@@ -826,17 +879,26 @@ const SparingConfig: React.FC = () => {
           <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={3}>
             <Typography variant="h6">Queue Items</Typography>
             <Box display="flex" gap={2} flexWrap="wrap">
-              <Button variant="outlined" onClick={handleProcessQueue} disabled={loading || retryingAll}>
+              <Button variant="outlined" onClick={handleProcessQueue} disabled={loading || retryingAll || clearingQueue}>
                 Process Queue Now
               </Button>
               <Button
                 variant="contained"
                 color="warning"
                 onClick={handleRetryAllPendingAndFailed}
-                disabled={loading || retryingAll}
+                disabled={loading || retryingAll || clearingQueue}
                 startIcon={retryingAll ? <CircularProgress size={20} /> : <RefreshIcon />}
               >
                 {retryingAll ? 'Retrying All...' : 'Retry All Failed & Pending'}
+              </Button>
+              <Button
+                variant="outlined"
+                color="error"
+                onClick={handleClearPendingAndFailed}
+                disabled={loading || retryingAll || clearingQueue}
+                startIcon={clearingQueue ? <CircularProgress size={20} /> : <DeleteIcon />}
+              >
+                {clearingQueue ? 'Removing...' : 'Clear Pending & Failed'}
               </Button>
             </Box>
           </Box>
@@ -897,15 +959,38 @@ const SparingConfig: React.FC = () => {
                       {item.sentAt ? new Date(item.sentAt).toLocaleString() : '-'}
                     </TableCell>
                     <TableCell align="right">
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => handleRetryQueueItem(item.id)}
-                        disabled={item.status === 'sent' || retryingItemId === item.id || retryingAll}
-                        startIcon={retryingItemId === item.id ? <CircularProgress size={16} /> : <RefreshIcon />}
-                      >
-                        {retryingItemId === item.id ? 'Retrying...' : 'Retry'}
-                      </Button>
+                      <Box display="flex" gap={1} justifyContent="flex-end" flexWrap="wrap">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => handleRetryQueueItem(item.id)}
+                          disabled={
+                            item.status === 'sent' ||
+                            retryingItemId === item.id ||
+                            retryingAll ||
+                            deletingItemId === item.id ||
+                            clearingQueue
+                          }
+                          startIcon={retryingItemId === item.id ? <CircularProgress size={16} /> : <RefreshIcon />}
+                        >
+                          {retryingItemId === item.id ? 'Retrying...' : 'Retry'}
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="error"
+                          onClick={() => handleDeleteQueueItem(item.id)}
+                          disabled={
+                            item.status === 'sent' ||
+                            deletingItemId === item.id ||
+                            retryingAll ||
+                            clearingQueue
+                          }
+                          startIcon={deletingItemId === item.id ? <CircularProgress size={16} /> : <DeleteIcon />}
+                        >
+                          {deletingItemId === item.id ? 'Removing...' : 'Remove'}
+                        </Button>
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}

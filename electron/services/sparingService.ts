@@ -1022,6 +1022,33 @@ export class SparingService {
     return row?.cnt || 0;
   }
 
+  /** Remove one queue row. Only pending, failed, or sending items can be deleted. */
+  deleteQueueItem(id: string): void {
+    const row = this.db.getDb().prepare('SELECT id, status FROM sparing_queue WHERE id = ?').get(id) as
+      | { id: string; status: string }
+      | undefined;
+    if (!row) {
+      throw new Error('Queue item not found');
+    }
+    if (row.status === 'sent') {
+      throw new Error('Cannot delete a queue item that was already sent');
+    }
+
+    this.db.getDb().prepare('DELETE FROM sparing_queue WHERE id = ?').run(id);
+    getLogger().info(`🗑️ Deleted SPARING queue item ${id} (was ${row.status})`);
+  }
+
+  /** Remove all pending, failed, and stuck sending rows from the queue. */
+  deletePendingAndFailedQueueItems(): { deleted: number } {
+    const result = this.db
+      .getDb()
+      .prepare(`DELETE FROM sparing_queue WHERE status IN ('pending', 'failed', 'sending')`)
+      .run();
+    const deleted = result.changes;
+    getLogger().info(`🗑️ Deleted ${deleted} SPARING queue item(s) (pending/failed/sending)`);
+    return { deleted };
+  }
+
   getQueueItems(limit: number = 100): SparingQueue[] {
     const rows = this.db
       .getDb()

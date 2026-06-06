@@ -1135,6 +1135,21 @@ app.post('/api/sparing/retry-all-pending-failed', authMiddleware, sparingRoleMid
     .then((result) => res.json(result))
     .catch((e) => res.status(400).json({ error: e?.message }));
 });
+app.delete('/api/sparing/queue/pending-failed', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  try {
+    return res.json(sparingService.deletePendingAndFailedQueueItems());
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message });
+  }
+});
+app.delete('/api/sparing/queue/:id', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  try {
+    sparingService.deleteQueueItem(req.params.id);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message });
+  }
+});
 app.get('/api/sparing/queue', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getQueueItems(Number(req.query.limit) || 100)));
 app.post('/api/sparing/send-now', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.sendNow(req.body?.hourTimestamp).then(() => res.json({ ok: true })).catch((e) => res.status(400).json({ error: e?.message }));
