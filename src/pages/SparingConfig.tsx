@@ -86,6 +86,8 @@ const SparingConfig: React.FC = () => {
   const [newMappingId, setNewMappingId] = useState('');
   const [exportLogDate, setExportLogDate] = useState<string>('');
   const [status, setStatus] = useState<{ enabled: boolean; sendMode: string; queueDepth: number; lastHourlySend?: number | null; last2MinSend?: number | null; nextRuns?: any }>({ enabled: false, sendMode: 'hourly', queueDepth: 0 });
+  const [retryingItemId, setRetryingItemId] = useState<string | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
 
   useEffect(() => {
     loadConfig();
@@ -255,10 +257,50 @@ const SparingConfig: React.FC = () => {
       setSuccess('Queue processed');
       setTimeout(() => setSuccess(''), 3000);
       await loadLogs();
+      await loadQueueItems();
+      await loadStatus();
     } catch (err: any) {
       setError(err.message || 'Failed to process queue');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRetryQueueItem = async (id: string) => {
+    try {
+      setRetryingItemId(id);
+      setError('');
+      await api.sparing?.retryQueueItem(id);
+      setSuccess('Queue item resent successfully');
+      setTimeout(() => setSuccess(''), 3000);
+      await loadQueueItems();
+      await loadLogs();
+      await loadStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to resend queue item');
+      await loadQueueItems();
+    } finally {
+      setRetryingItemId(null);
+    }
+  };
+
+  const handleRetryAllPendingAndFailed = async () => {
+    try {
+      setRetryingAll(true);
+      setError('');
+      const result = await api.sparing?.retryAllPendingAndFailed();
+      const sent = result?.sent ?? 0;
+      const failed = result?.failed ?? 0;
+      const requeued = result?.requeued ?? 0;
+      setSuccess(`Force retry complete: ${requeued} re-queued, ${sent} sent, ${failed} failed`);
+      setTimeout(() => setSuccess(''), 5000);
+      await loadQueueItems();
+      await loadLogs();
+      await loadStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to retry all queue items');
+    } finally {
+      setRetryingAll(false);
     }
   };
 
@@ -620,9 +662,18 @@ const SparingConfig: React.FC = () => {
             <Button
               variant="outlined"
               onClick={handleProcessQueue}
-              disabled={loading}
+              disabled={loading || retryingAll}
             >
               Process Queue
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={handleRetryAllPendingAndFailed}
+              disabled={loading || retryingAll}
+              startIcon={retryingAll ? <CircularProgress size={20} /> : <RefreshIcon />}
+            >
+              {retryingAll ? 'Retrying All...' : 'Retry All Failed & Pending'}
             </Button>
           </Box>
         </Paper>
@@ -772,20 +823,22 @@ const SparingConfig: React.FC = () => {
 
       {tabValue === 3 && (
         <Paper sx={{ p: 3 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={3}>
             <Typography variant="h6">Queue Items</Typography>
-            <Button variant="outlined" onClick={async () => {
-              try {
-                await api.sparing?.processQueue();
-                await loadQueueItems();
-                setSuccess('Queue processed');
-                setTimeout(() => setSuccess(''), 3000);
-              } catch (err: any) {
-                setError(err.message || 'Failed to process queue');
-              }
-            }}>
-              Process Queue Now
-            </Button>
+            <Box display="flex" gap={2} flexWrap="wrap">
+              <Button variant="outlined" onClick={handleProcessQueue} disabled={loading || retryingAll}>
+                Process Queue Now
+              </Button>
+              <Button
+                variant="contained"
+                color="warning"
+                onClick={handleRetryAllPendingAndFailed}
+                disabled={loading || retryingAll}
+                startIcon={retryingAll ? <CircularProgress size={20} /> : <RefreshIcon />}
+              >
+                {retryingAll ? 'Retrying All...' : 'Retry All Failed & Pending'}
+              </Button>
+            </Box>
           </Box>
 
           <TableContainer>
@@ -801,6 +854,7 @@ const SparingConfig: React.FC = () => {
                   <TableCell>Last Attempt</TableCell>
                   <TableCell>Error Message</TableCell>
                   <TableCell>Sent At</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -842,11 +896,22 @@ const SparingConfig: React.FC = () => {
                     <TableCell>
                       {item.sentAt ? new Date(item.sentAt).toLocaleString() : '-'}
                     </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleRetryQueueItem(item.id)}
+                        disabled={item.status === 'sent' || retryingItemId === item.id || retryingAll}
+                        startIcon={retryingItemId === item.id ? <CircularProgress size={16} /> : <RefreshIcon />}
+                      >
+                        {retryingItemId === item.id ? 'Retrying...' : 'Retry'}
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {queueItems.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} align="center">
+                    <TableCell colSpan={10} align="center">
                       No queue items found
                     </TableCell>
                   </TableRow>

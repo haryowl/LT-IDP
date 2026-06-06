@@ -834,6 +834,15 @@ function setupIpcHandlers() {
     return sparingService.getQueueItems(limit || 100);
   });
 
+  ipcMain.handle('sparing:retryQueueItem', async (_, id: string) => {
+    await sparingService.retryQueueItem(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('sparing:retryAllPendingAndFailed', async () => {
+    return await sparingService.retryAllPendingAndFailed();
+  });
+
   // Manual Send (for testing)
   ipcMain.handle('sparing:sendNow', async (_, hourTimestamp) => {
     await sparingService.sendNow(hourTimestamp);

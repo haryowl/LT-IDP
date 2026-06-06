@@ -136,6 +136,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportLog: (date?: string) => ipcRenderer.invoke('sparing:exportLog', date),
     processQueue: () => ipcRenderer.invoke('sparing:processQueue'),
     getQueueItems: (limit?: number) => ipcRenderer.invoke('sparing:getQueueItems', limit),
+    retryQueueItem: (id: string) => ipcRenderer.invoke('sparing:retryQueueItem', id),
+    retryAllPendingAndFailed: () => ipcRenderer.invoke('sparing:retryAllPendingAndFailed'),
     sendNow: (hourTimestamp?: number) =>
       ipcRenderer.invoke('sparing:sendNow', hourTimestamp),
     getStatus: () => ipcRenderer.invoke('sparing:getStatus'),

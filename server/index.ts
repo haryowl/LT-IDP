@@ -1123,6 +1123,18 @@ app.get('/api/sparing/export-log', authMiddleware, sparingRoleMiddleware, (req, 
 app.post('/api/sparing/process-queue', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.processQueue().then(() => res.json({ ok: true }));
 });
+app.post('/api/sparing/queue/:id/retry', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  sparingService
+    .retryQueueItem(req.params.id)
+    .then(() => res.json({ ok: true }))
+    .catch((e) => res.status(400).json({ error: e?.message }));
+});
+app.post('/api/sparing/retry-all-pending-failed', authMiddleware, sparingRoleMiddleware, (req, res) => {
+  sparingService
+    .retryAllPendingAndFailed()
+    .then((result) => res.json(result))
+    .catch((e) => res.status(400).json({ error: e?.message }));
+});
 app.get('/api/sparing/queue', authMiddleware, sparingRoleMiddleware, (req, res) => res.json(sparingService.getQueueItems(Number(req.query.limit) || 100)));
 app.post('/api/sparing/send-now', authMiddleware, sparingRoleMiddleware, (req, res) => {
   sparingService.sendNow(req.body?.hourTimestamp).then(() => res.json({ ok: true })).catch((e) => res.status(400).json({ error: e?.message }));

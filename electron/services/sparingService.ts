@@ -845,9 +845,57 @@ export class SparingService {
     }
   }
 
+  private getQueueEndpoint(sendType: string): string {
+    const { SEND_HOURLY_URL, SEND_2MIN_URL, TESTING_URL } = this.getApiUrls();
+    if (sendType === '2min') return SEND_2MIN_URL;
+    if (sendType === 'testing') return TESTING_URL;
+    return SEND_HOURLY_URL;
+  }
+
+  private async sendOneQueueItem(
+    item: any,
+    options?: { force?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
+    const config = this.getSparingConfig();
+    const maxAttempts = config?.retryMaxAttempts || 5;
+    const force = options?.force ?? false;
+
+    try {
+      this.db.getDb().prepare('UPDATE sparing_queue SET status = ? WHERE id = ?').run('sending', item.id);
+
+      const response = await this.sendToSparing(this.getQueueEndpoint(item.send_type), item.payload);
+
+      if (response.status) {
+        this.db.getDb().prepare('UPDATE sparing_queue SET status = ?, sent_at = ? WHERE id = ?').run('sent', Date.now(), item.id);
+        getLogger().info(`✅ Queue item ${item.id} sent successfully`);
+        return { success: true };
+      }
+
+      throw new Error(response.desc || 'Unknown error');
+    } catch (error: any) {
+      const newRetryCount = item.retry_count + 1;
+      const newStatus = force ? 'failed' : newRetryCount >= maxAttempts ? 'failed' : 'pending';
+
+      this.db
+        .getDb()
+        .prepare('UPDATE sparing_queue SET status = ?, retry_count = ?, error_message = ?, last_attempt_at = ? WHERE id = ?')
+        .run(newStatus, newRetryCount, error.message, Date.now(), item.id);
+
+      if (!force && newStatus === 'failed') {
+        getLogger().error(`❌ Queue item ${item.id} failed permanently after ${maxAttempts} attempts:`, error.message);
+      } else if (!force) {
+        getLogger().error(`❌ Queue item ${item.id} failed (attempt ${newRetryCount}/${maxAttempts}):`, error.message);
+      } else {
+        getLogger().error(`❌ Queue item ${item.id} force retry failed:`, error.message);
+      }
+
+      return { success: false, error: error.message };
+    }
+  }
+
   async processQueue(): Promise<void> {
     const config = this.getSparingConfig();
-    const maxAttempts = config?.retryMaxAttempts || 5; // Default to 5 if not configured
+    const maxAttempts = config?.retryMaxAttempts || 5;
 
     try {
       if (config?.enabled && (await this.isSparingHostReachable())) {
@@ -878,38 +926,70 @@ export class SparingService {
     getLogger().info(`🔄 Processing ${pending.length} pending queue items... (max attempts: ${maxAttempts})`);
 
     for (const item of pending) {
-      try {
-        this.db.getDb().prepare('UPDATE sparing_queue SET status = ? WHERE id = ?').run('sending', item.id);
+      await this.sendOneQueueItem(item);
+    }
+  }
 
-        const { SEND_HOURLY_URL, SEND_2MIN_URL, TESTING_URL } = this.getApiUrls();
-        let endpoint = SEND_HOURLY_URL;
-        if (item.send_type === '2min') endpoint = SEND_2MIN_URL;
-        if (item.send_type === 'testing') endpoint = TESTING_URL;
+  /** Force-reset and immediately resend one queue row (pending, failed, or stuck sending). */
+  async retryQueueItem(id: string): Promise<void> {
+    const row = this.db.getDb().prepare('SELECT * FROM sparing_queue WHERE id = ?').get(id) as any;
+    if (!row) {
+      throw new Error('Queue item not found');
+    }
+    if (row.status === 'sent') {
+      throw new Error('Queue item already sent');
+    }
 
-        const response = await this.sendToSparing(endpoint, item.payload);
+    this.db
+      .getDb()
+      .prepare(
+        `UPDATE sparing_queue SET status = 'pending', retry_count = 0, error_message = NULL, last_attempt_at = NULL WHERE id = ?`
+      )
+      .run(id);
 
-        if (response.status) {
-          this.db.getDb().prepare('UPDATE sparing_queue SET status = ?, sent_at = ? WHERE id = ?').run('sent', Date.now(), item.id);
-          getLogger().info(`✅ Queue item ${item.id} sent successfully`);
-        } else {
-          throw new Error(response.desc || 'Unknown error');
-        }
-      } catch (error: any) {
-        const newRetryCount = item.retry_count + 1;
-        const newStatus = newRetryCount >= maxAttempts ? 'failed' : 'pending';
-        
-        this.db
-          .getDb()
-          .prepare('UPDATE sparing_queue SET status = ?, retry_count = ?, error_message = ?, last_attempt_at = ? WHERE id = ?')
-          .run(newStatus, newRetryCount, error.message, Date.now(), item.id);
+    const refreshed = this.db.getDb().prepare('SELECT * FROM sparing_queue WHERE id = ?').get(id) as any;
+    const result = await this.sendOneQueueItem(refreshed, { force: true });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to resend queue item');
+    }
+  }
 
-        if (newStatus === 'failed') {
-          getLogger().error(`❌ Queue item ${item.id} failed permanently after ${maxAttempts} attempts:`, error.message);
-        } else {
-          getLogger().error(`❌ Queue item ${item.id} failed (attempt ${newRetryCount}/${maxAttempts}):`, error.message);
-        }
+  /** Force-reset all pending/failed/stuck rows and resend every item to KLHK. */
+  async retryAllPendingAndFailed(): Promise<{ requeued: number; sent: number; failed: number }> {
+    const reset = this.db
+      .getDb()
+      .prepare(
+        `UPDATE sparing_queue
+         SET status = 'pending', retry_count = 0, error_message = NULL, last_attempt_at = NULL
+         WHERE status IN ('pending', 'failed', 'sending')`
+      )
+      .run();
+
+    const requeued = reset.changes;
+    getLogger().info(`🔁 Force re-queued ${requeued} SPARING item(s) for resend`);
+
+    let sent = 0;
+    let failed = 0;
+
+    while (true) {
+      const batch = this.db
+        .getDb()
+        .prepare(
+          `SELECT * FROM sparing_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 10`
+        )
+        .all() as any[];
+
+      if (batch.length === 0) break;
+
+      for (const item of batch) {
+        const result = await this.sendOneQueueItem(item, { force: true });
+        if (result.success) sent++;
+        else failed++;
       }
     }
+
+    getLogger().info(`🔁 Force retry complete: ${sent} sent, ${failed} failed`);
+    return { requeued, sent, failed };
   }
 
   // Status helpers
