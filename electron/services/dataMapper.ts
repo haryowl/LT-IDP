@@ -460,9 +460,11 @@ export class DataMapperService extends EventEmitter {
         if (apiStatus == null) continue;
         value = apiStatus ? 1 : 0;
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_DESC) {
-        const desc = tel.getSparingResponseDesc();
-        if (desc == null) continue;
-        value = desc;
+        if (!tel.hasSparingResponse()) continue;
+        value = tel.getSparingResponseDesc() ?? '';
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_RAW) {
+        if (!tel.hasSparingResponse()) continue;
+        value = tel.getSparingResponseRaw() ?? '';
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_LAST_SEND_DURATION_MS) {
         const duration = tel.getSparingLastSendDurationMs();
         if (duration == null) continue;

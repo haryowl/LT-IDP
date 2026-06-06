@@ -846,21 +846,23 @@ export class SparingService {
   }
 
   private recordSparingApiResponse(responseBody: string, durationMs: number, sendSucceeded: boolean): void {
+    const raw = String(responseBody ?? '');
     try {
-      const parsed = JSON.parse(responseBody);
+      const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && 'status' in parsed) {
         getTransmissionTelemetry().recordSparingResponse(
           Boolean(parsed.status),
-          parsed.desc != null ? String(parsed.desc) : null,
-          durationMs
+          parsed.desc != null ? String(parsed.desc) : '',
+          durationMs,
+          raw
         );
         return;
       }
     } catch {
-      // plain-text or non-JSON body
+      // plain-text or non-JSON body (e.g. network errors)
     }
 
-    getTransmissionTelemetry().recordSparingResponse(sendSucceeded, responseBody || null, durationMs);
+    getTransmissionTelemetry().recordSparingResponse(sendSucceeded, raw || '', durationMs, raw);
   }
 
   private getQueueEndpoint(sendType: string): string {

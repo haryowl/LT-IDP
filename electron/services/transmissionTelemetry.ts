@@ -9,6 +9,7 @@ export const SYSTEM_TELEMETRY_SOURCE_IDS = {
   SPARING_QUEUE: 'system-sparing-queue-depth',
   SPARING_RESPONSE_STATUS: 'system-sparing-response-status',
   SPARING_RESPONSE_DESC: 'system-sparing-response-desc',
+  SPARING_RESPONSE_RAW: 'system-sparing-response-raw',
   SPARING_LAST_SEND_DURATION_MS: 'system-sparing-last-send-duration-ms',
   SPARING_LAST_RESPONSE_AT: 'system-sparing-last-response-at',
   MQTT_SUCCESS: 'system-mqtt-success-count',
@@ -32,6 +33,7 @@ export class TransmissionTelemetry {
   private httpFail = 0;
   private sparingResponseStatus: boolean | null = null;
   private sparingResponseDesc: string | null = null;
+  private sparingResponseRaw: string | null = null;
   private sparingLastSendDurationMs: number | null = null;
   private sparingLastResponseAt: number | null = null;
 
@@ -40,12 +42,22 @@ export class TransmissionTelemetry {
     else this.sparingFail += 1;
   }
 
-  /** Latest KLHK API response body fields from the most recent SPARING send attempt. */
-  recordSparingResponse(apiStatus: boolean, desc: string | null, durationMs: number): void {
+  /** Latest KLHK API response from the most recent SPARING send attempt. */
+  recordSparingResponse(
+    apiStatus: boolean,
+    desc: string | null,
+    durationMs: number,
+    rawResponse?: string | null
+  ): void {
     this.sparingResponseStatus = apiStatus;
     this.sparingResponseDesc = desc;
+    this.sparingResponseRaw = rawResponse ?? null;
     this.sparingLastSendDurationMs = durationMs;
     this.sparingLastResponseAt = Date.now();
+  }
+
+  hasSparingResponse(): boolean {
+    return this.sparingLastResponseAt != null;
   }
 
   getSparingResponseStatus(): boolean | null {
@@ -54,6 +66,10 @@ export class TransmissionTelemetry {
 
   getSparingResponseDesc(): string | null {
     return this.sparingResponseDesc;
+  }
+
+  getSparingResponseRaw(): string | null {
+    return this.sparingResponseRaw;
   }
 
   getSparingLastSendDurationMs(): number | null {

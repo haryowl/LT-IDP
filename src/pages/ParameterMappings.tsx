@@ -189,7 +189,13 @@ const ParameterMappings: React.FC = () => {
         id: 'system-sparing-response-desc',
         label: 'SPARING — last API response description',
         description:
-          'KLHK response field `desc` from the latest send (error text when invalid). Updates after each SPARING API call. Data type: string.',
+          'KLHK `desc` field only (empty on success when null). For the full Response text from Send Logs, use “last API response (full)” below. Data type: string.',
+      },
+      {
+        id: 'system-sparing-response-raw',
+        label: 'SPARING — last API response (full)',
+        description:
+          'Full response body as shown in SPARING Send Logs (e.g. {"status":true,"desc":null} or network error text). Data type: string.',
       },
       {
         id: 'system-sparing-last-send-duration-ms',
@@ -567,7 +573,7 @@ const ParameterMappings: React.FC = () => {
                 onChange={(e) => {
                   const id = e.target.value;
                   let dataType: string | undefined;
-                  if (id === 'system-sparing-response-desc') {
+                  if (id === 'system-sparing-response-desc' || id === 'system-sparing-response-raw') {
                     dataType = 'string';
                   } else if (id === 'system-sparing-last-response-at') {
                     dataType = 'timestamp';
