@@ -845,6 +845,24 @@ export class SparingService {
     }
   }
 
+  private recordSparingApiResponse(responseBody: string, durationMs: number, sendSucceeded: boolean): void {
+    try {
+      const parsed = JSON.parse(responseBody);
+      if (parsed && typeof parsed === 'object' && 'status' in parsed) {
+        getTransmissionTelemetry().recordSparingResponse(
+          Boolean(parsed.status),
+          parsed.desc != null ? String(parsed.desc) : null,
+          durationMs
+        );
+        return;
+      }
+    } catch {
+      // plain-text or non-JSON body
+    }
+
+    getTransmissionTelemetry().recordSparingResponse(sendSucceeded, responseBody || null, durationMs);
+  }
+
   private getQueueEndpoint(sendType: string): string {
     const { SEND_HOURLY_URL, SEND_2MIN_URL, TESTING_URL } = this.getApiUrls();
     if (sendType === '2min') return SEND_2MIN_URL;
@@ -860,10 +878,14 @@ export class SparingService {
     const maxAttempts = config?.retryMaxAttempts || 5;
     const force = options?.force ?? false;
 
+    const startTime = Date.now();
+
     try {
       this.db.getDb().prepare('UPDATE sparing_queue SET status = ? WHERE id = ?').run('sending', item.id);
 
       const response = await this.sendToSparing(this.getQueueEndpoint(item.send_type), item.payload);
+      const durationMs = Date.now() - startTime;
+      this.recordSparingApiResponse(JSON.stringify(response), durationMs, Boolean(response.status));
 
       if (response.status) {
         this.db.getDb().prepare('UPDATE sparing_queue SET status = ?, sent_at = ? WHERE id = ?').run('sent', Date.now(), item.id);
@@ -873,6 +895,8 @@ export class SparingService {
 
       throw new Error(response.desc || 'Unknown error');
     } catch (error: any) {
+      const durationMs = Date.now() - startTime;
+      this.recordSparingApiResponse(error.message || String(error), durationMs, false);
       const newRetryCount = item.retry_count + 1;
       const newStatus = force ? 'failed' : newRetryCount >= maxAttempts ? 'failed' : 'pending';
 
@@ -1098,6 +1122,7 @@ export class SparingService {
 
     try {
       getTransmissionTelemetry().recordSparing(status);
+      this.recordSparingApiResponse(response, durationMs, status === 'success');
     } catch {
       // ignore telemetry errors
     }

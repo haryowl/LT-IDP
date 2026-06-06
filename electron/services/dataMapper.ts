@@ -455,6 +455,22 @@ export class DataMapperService extends EventEmitter {
         value = tel.getSparingFail();
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_QUEUE) {
         value = this.db.getSparingPendingQueueCount();
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_STATUS) {
+        const apiStatus = tel.getSparingResponseStatus();
+        if (apiStatus == null) continue;
+        value = apiStatus ? 1 : 0;
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_DESC) {
+        const desc = tel.getSparingResponseDesc();
+        if (desc == null) continue;
+        value = desc;
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_LAST_SEND_DURATION_MS) {
+        const duration = tel.getSparingLastSendDurationMs();
+        if (duration == null) continue;
+        value = duration;
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_LAST_RESPONSE_AT) {
+        const at = tel.getSparingLastResponseAt();
+        if (at == null) continue;
+        value = at;
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.MQTT_SUCCESS) {
         value = tel.getMqttSuccess();
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.MQTT_FAIL) {

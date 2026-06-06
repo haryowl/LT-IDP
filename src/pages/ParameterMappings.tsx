@@ -180,6 +180,29 @@ const ParameterMappings: React.FC = () => {
         description: 'Number of rows waiting in the SPARING retry queue (live from database). Data type: number.',
       },
       {
+        id: 'system-sparing-response-status',
+        label: 'SPARING — last API response status',
+        description:
+          'KLHK response field `status` from the latest send (1 = true, 0 = false). Updates after each SPARING API call. Data type: number or boolean.',
+      },
+      {
+        id: 'system-sparing-response-desc',
+        label: 'SPARING — last API response description',
+        description:
+          'KLHK response field `desc` from the latest send (error text when invalid). Updates after each SPARING API call. Data type: string.',
+      },
+      {
+        id: 'system-sparing-last-send-duration-ms',
+        label: 'SPARING — last send duration (ms)',
+        description: 'Round-trip time of the latest SPARING API request in milliseconds. Data type: number.',
+      },
+      {
+        id: 'system-sparing-last-response-at',
+        label: 'SPARING — last response time',
+        description:
+          'Unix timestamp (ms) when the latest SPARING API response was received. Data type: timestamp or number.',
+      },
+      {
         id: 'system-mqtt-success-count',
         label: 'MQTT publisher — successful publishes',
         description: 'Total successful MQTT publish operations (all publishers) since app start. Data type: number.',
@@ -543,16 +566,26 @@ const ParameterMappings: React.FC = () => {
                 value={formData.sourceDeviceId || 'system-timestamp'}
                 onChange={(e) => {
                   const id = e.target.value;
-                  const isTelemetryCounter =
-                    id.startsWith('system-sparing-') || id.startsWith('system-mqtt-') || id.startsWith('system-http-');
+                  let dataType: string | undefined;
+                  if (id === 'system-sparing-response-desc') {
+                    dataType = 'string';
+                  } else if (id === 'system-sparing-last-response-at') {
+                    dataType = 'timestamp';
+                  } else if (
+                    id.startsWith('system-sparing-') ||
+                    id.startsWith('system-mqtt-') ||
+                    id.startsWith('system-http-')
+                  ) {
+                    dataType = 'number';
+                  }
                   setFormData((prev) => ({
                     ...prev,
                     sourceDeviceId: id,
-                    ...(isTelemetryCounter ? { dataType: 'number' as const } : {}),
+                    ...(dataType ? { dataType } : {}),
                   }));
                 }}
                 fullWidth
-                helperText="Built-in values from this application (not from Modbus or MQTT). Transmission counters reset when the app restarts; queue depth is live from the database."
+                helperText="Built-in values from this application (not from Modbus or MQTT). Counters reset on app restart; SPARING response fields update after each KLHK API send."
               >
                 {systemSources.map((source) => (
                   <MenuItem key={source.id} value={source.id} sx={{ alignItems: 'flex-start', py: 1 }}>

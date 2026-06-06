@@ -7,6 +7,10 @@ export const SYSTEM_TELEMETRY_SOURCE_IDS = {
   SPARING_SUCCESS: 'system-sparing-success-count',
   SPARING_FAIL: 'system-sparing-fail-count',
   SPARING_QUEUE: 'system-sparing-queue-depth',
+  SPARING_RESPONSE_STATUS: 'system-sparing-response-status',
+  SPARING_RESPONSE_DESC: 'system-sparing-response-desc',
+  SPARING_LAST_SEND_DURATION_MS: 'system-sparing-last-send-duration-ms',
+  SPARING_LAST_RESPONSE_AT: 'system-sparing-last-response-at',
   MQTT_SUCCESS: 'system-mqtt-success-count',
   MQTT_FAIL: 'system-mqtt-fail-count',
   HTTP_SUCCESS: 'system-http-success-count',
@@ -26,10 +30,38 @@ export class TransmissionTelemetry {
   private mqttFail = 0;
   private httpSuccess = 0;
   private httpFail = 0;
+  private sparingResponseStatus: boolean | null = null;
+  private sparingResponseDesc: string | null = null;
+  private sparingLastSendDurationMs: number | null = null;
+  private sparingLastResponseAt: number | null = null;
 
   recordSparing(status: 'success' | 'failed'): void {
     if (status === 'success') this.sparingSuccess += 1;
     else this.sparingFail += 1;
+  }
+
+  /** Latest KLHK API response body fields from the most recent SPARING send attempt. */
+  recordSparingResponse(apiStatus: boolean, desc: string | null, durationMs: number): void {
+    this.sparingResponseStatus = apiStatus;
+    this.sparingResponseDesc = desc;
+    this.sparingLastSendDurationMs = durationMs;
+    this.sparingLastResponseAt = Date.now();
+  }
+
+  getSparingResponseStatus(): boolean | null {
+    return this.sparingResponseStatus;
+  }
+
+  getSparingResponseDesc(): string | null {
+    return this.sparingResponseDesc;
+  }
+
+  getSparingLastSendDurationMs(): number | null {
+    return this.sparingLastSendDurationMs;
+  }
+
+  getSparingLastResponseAt(): number | null {
+    return this.sparingLastResponseAt;
   }
 
   recordMqtt(success: boolean): void {
