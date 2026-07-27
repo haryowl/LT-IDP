@@ -663,9 +663,9 @@ const SparingConfig: React.FC = () => {
                 label="Re-queue all failed items when SPARING is reachable again"
               />
               <Typography variant="body2" color="textSecondary" sx={{ ml: 4, mt: 0.5 }}>
-                Default off: only rows with network-style errors (timeouts, DNS, connection refused, etc.)
-                are reset for retry. When on, every permanently failed row is reset when the API host responds
-                again—useful after outages; may retry non-network errors (e.g. bad payload) too.
+                After a long outage or app restart, failed queue items are re-opened automatically and missing
+                hours (last 7 days) are backfilled from local history when data exists. This toggle also
+                re-queues non-network failures during normal operation. While offline, retries are not consumed.
               </Typography>
             </Grid>
             {config?.apiSecretFetchedAt && (

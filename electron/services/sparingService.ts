@@ -46,6 +46,12 @@ export class SparingService {
   private hourlyScheduler?: NodeJS.Timeout;
   private twoMinScheduler?: NodeJS.Timeout;
   private retryScheduler?: NodeJS.Timeout;
+  /** Tracks reachability across processQueue runs to detect reconnect after outage. */
+  private lastHostReachable: boolean | null = null;
+  private lastBackfillAt = 0;
+  private static readonly BACKFILL_LOOKBACK_DAYS = 7;
+  private static readonly BACKFILL_2MIN_LOOKBACK_HOURS = 12;
+  private static readonly BACKFILL_COOLDOWN_MS = 30 * 60 * 1000;
 
   constructor(private db: DatabaseService) {}
 
@@ -319,16 +325,16 @@ export class SparingService {
   // ============================================================================
   // DATA COLLECTION & PREPARATION
   // ============================================================================
-  async collectHourlyData(hourTimestamp: number): Promise<SparingHourlyData | null> {
+  async collectHourlyData(hourTimestamp: number, opts?: { quiet?: boolean }): Promise<SparingHourlyData | null> {
     const config = this.getSparingConfig();
     if (!config || !config.loggerId) {
-      getLogger().error('❌ SPARING config not found or logger ID missing');
+      if (!opts?.quiet) getLogger().error('❌ SPARING config not found or logger ID missing');
       return null;
     }
 
     const mappings = this.getSparingMappings().filter((m) => m.enabled);
     if (mappings.length === 0) {
-      getLogger().error('❌ No SPARING mappings configured');
+      if (!opts?.quiet) getLogger().error('❌ No SPARING mappings configured');
       return null;
     }
 
@@ -346,7 +352,9 @@ export class SparingService {
 
     const rows = this.db.getDb().prepare(query).all(startTime, endTime, ...mappingIds) as any[];
 
-    getLogger().info(`📊 Found ${rows.length} historical records for hour ${new Date(hourTimestamp).toISOString()}`);
+    if (!opts?.quiet) {
+      getLogger().info(`📊 Found ${rows.length} historical records for hour ${new Date(hourTimestamp).toISOString()}`);
+    }
 
     if (rows.length === 0) {
       return null;
@@ -398,16 +406,16 @@ export class SparingService {
   }
 
   // Collect a single 2-minute slot using latest values within the slot window
-  async collect2MinData(slotTimestamp: number): Promise<SparingHourlyData | null> {
+  async collect2MinData(slotTimestamp: number, opts?: { quiet?: boolean }): Promise<SparingHourlyData | null> {
     const config = this.getSparingConfig();
     if (!config || !config.loggerId) {
-      getLogger().error('❌ SPARING config not found or logger ID missing');
+      if (!opts?.quiet) getLogger().error('❌ SPARING config not found or logger ID missing');
       return null;
     }
 
     const mappings = this.getSparingMappings().filter((m) => m.enabled);
     if (mappings.length === 0) {
-      getLogger().error('❌ No SPARING mappings configured');
+      if (!opts?.quiet) getLogger().error('❌ No SPARING mappings configured');
       return null;
     }
 
@@ -425,7 +433,9 @@ export class SparingService {
     const rows = this.db.getDb().prepare(query).all(start, end, ...mappingIds) as any[];
 
     if (rows.length === 0) {
-      getLogger().info(`⚠️ No records found for slot ${new Date(slotTimestamp).toISOString()}`);
+      if (!opts?.quiet) {
+        getLogger().info(`⚠️ No records found for slot ${new Date(slotTimestamp).toISOString()}`);
+      }
       return null;
     }
 
@@ -491,7 +501,12 @@ export class SparingService {
   // ============================================================================
   // HTTP REQUEST HELPER
   // ============================================================================
-  private async httpRequest(url: string, method: string, body?: any, opts?: { acceptText?: boolean }): Promise<any> {
+  private async httpRequest(
+    url: string,
+    method: string,
+    body?: any,
+    opts?: { acceptText?: boolean; /** When true with acceptText, return body even for non-2xx (e.g. KLHK HTTP 400 JSON). */ returnErrorBody?: boolean }
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       const urlObj = new URL(url);
       const headers: any = {
@@ -525,6 +540,11 @@ export class SparingService {
         res.on('end', () => {
           const is2xx = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
           if (!is2xx) {
+            // Allow SPARING send path to parse KLHK JSON bodies on HTTP 400/422/etc.
+            if (opts?.acceptText && opts?.returnErrorBody) {
+              resolve(data);
+              return;
+            }
             reject(new Error(`HTTP ${res.statusCode}: ${data}`));
             return;
           }
@@ -573,8 +593,8 @@ export class SparingService {
         fileLogger.writeToFile(`[SPARING] Endpoint: ${endpoint}\n[SPARING] JWT: ${jwtToken}\n`);
       } catch {}
 
-      // Send and capture raw response for logging, then parse JSON if possible
-      const raw = await this.httpRequest(endpoint, 'POST', payload, { acceptText: true });
+      // Capture body even on HTTP 400 so KLHK JSON {"status":false,"desc":...} is handled as API response
+      const raw = await this.httpRequest(endpoint, 'POST', payload, { acceptText: true, returnErrorBody: true });
       let responseData: any;
       try {
         responseData = JSON.parse(raw);
@@ -591,12 +611,56 @@ export class SparingService {
       } catch {}
 
       return {
-        status: responseData.status || false,
-        desc: responseData.desc || null,
+        status: Boolean(responseData?.status),
+        desc: responseData?.desc != null ? String(responseData.desc) : (typeof raw === 'string' ? raw : null),
       };
     } catch (error: any) {
       getLogger().error(`❌ Send failed:`, error.message);
       throw new Error(`Send failed: ${error.message}`);
+    }
+  }
+
+  /** True if this hour/slot was already delivered (config marker, queue sent, or success log). */
+  private hasAlreadySent(sendType: 'hourly' | '2min' | 'testing', hourTimestamp: number): boolean {
+    const config = this.getSparingConfig();
+    if (sendType === 'hourly' && config?.lastHourlySend != null) {
+      const lastBucket = Math.floor(config.lastHourlySend / (60 * 60 * 1000)) * (60 * 60 * 1000);
+      if (lastBucket === hourTimestamp) return true;
+    }
+    if (sendType === '2min' && (config as any)?.last2MinSend != null) {
+      const last2 = (config as any).last2MinSend as number;
+      const lastSlot = last2 - (last2 % (2 * 60 * 1000));
+      const thisSlot = hourTimestamp - (hourTimestamp % (2 * 60 * 1000));
+      if (lastSlot === thisSlot) return true;
+    }
+
+    const queueSent = this.db
+      .getDb()
+      .prepare(
+        `SELECT 1 as ok FROM sparing_queue
+         WHERE send_type = ? AND hour_timestamp = ? AND status = 'sent'
+         LIMIT 1`
+      )
+      .get(sendType, hourTimestamp) as { ok?: number } | undefined;
+    if (queueSent) return true;
+
+    const logOk = this.db
+      .getDb()
+      .prepare(
+        `SELECT 1 as ok FROM sparing_logs
+         WHERE send_type = ? AND hour_timestamp = ? AND status = 'success'
+         LIMIT 1`
+      )
+      .get(sendType, hourTimestamp) as { ok?: number } | undefined;
+    return Boolean(logOk);
+  }
+
+  /** After a successful delivery, remember the hour/slot so schedulers do not resend. */
+  private markSlotSent(sendType: string, hourTimestamp: number): void {
+    if (sendType === 'hourly') {
+      this.upsertSparingConfig({ lastHourlySend: hourTimestamp });
+    } else if (sendType === '2min') {
+      this.upsertSparingConfig({ last2MinSend: hourTimestamp } as any);
     }
   }
 
@@ -623,13 +687,10 @@ export class SparingService {
     let jwtToken: string = '';
 
     try {
-      // Duplicate guard: do not send for the same hour twice
-      if (config.lastHourlySend) {
-        const lastBucket = Math.floor(config.lastHourlySend / (60 * 60 * 1000)) * (60 * 60 * 1000);
-        if (lastBucket === hourTimestamp) {
-          getLogger().info('⏭️  Skipping hourly send: already sent for this hour');
-          return;
-        }
+      // Duplicate guard: config marker, successful queue row, or success log for this hour
+      if (this.hasAlreadySent('hourly', hourTimestamp)) {
+        getLogger().info('⏭️  Skipping hourly send: already sent for this hour');
+        return;
       }
 
       hourlyData = await this.collectHourlyData(hourTimestamp);
@@ -681,9 +742,7 @@ export class SparingService {
       if (response.status) {
         getLogger().info(`✅ Hourly batch sent successfully in ${duration}ms`);
 
-        // Store the hourTimestamp that was sent, not the current time
-        // This ensures the duplicate guard works correctly for the next hour
-        this.upsertSparingConfig({ lastHourlySend: hourTimestamp });
+        this.markSlotSent('hourly', hourTimestamp);
 
         this.logSend('hourly', hourTimestamp, hourlyData.data.length, 'success', JSON.stringify(response), duration);
       } else {
@@ -817,19 +876,59 @@ export class SparingService {
     return n;
   }
 
-  private async addToQueue(sendType: 'hourly' | '2min' | 'testing', hourTimestamp: number, errorMessage: string): Promise<void> {
+  private async addToQueue(
+    sendType: 'hourly' | '2min' | 'testing',
+    hourTimestamp: number,
+    errorMessage: string,
+    opts?: { quietCollect?: boolean }
+  ): Promise<void> {
     try {
       const config = this.getSparingConfig();
       if (!config || !config.apiSecret) return;
 
-      const hourlyData = await this.collectHourlyData(hourTimestamp);
-      if (!hourlyData) return;
+      // Do not queue again if this hour/slot was already delivered
+      if (this.hasAlreadySent(sendType, hourTimestamp)) {
+        getLogger().info(`⏭️  Skip queue: ${sendType} ${new Date(hourTimestamp).toISOString()} already sent`);
+        return;
+      }
 
-      const jwtToken = this.encryptJWT(hourlyData, config.apiSecret);
+      // One pending/sending/failed row per send_type + hour_timestamp (dedup)
+      const existing = this.db
+        .getDb()
+        .prepare(
+          `SELECT id, status FROM sparing_queue
+           WHERE send_type = ? AND hour_timestamp = ? AND status IN ('pending', 'sending', 'failed')
+           ORDER BY created_at DESC
+           LIMIT 1`
+        )
+        .get(sendType, hourTimestamp) as { id: string; status: string } | undefined;
+
+      const quiet = Boolean(opts?.quietCollect);
+      const payloadData =
+        sendType === '2min'
+          ? await this.collect2MinData(hourTimestamp, { quiet })
+          : await this.collectHourlyData(hourTimestamp, { quiet });
+      if (!payloadData) return;
+
+      const jwtToken = this.encryptJWT(payloadData, config.apiSecret);
+      const now = Date.now();
+      const recordsCount = payloadData.data?.length ?? 0;
+
+      if (existing) {
+        this.db
+          .getDb()
+          .prepare(
+            `UPDATE sparing_queue
+             SET payload = ?, records_count = ?, status = 'pending', retry_count = 0,
+                 last_attempt_at = ?, error_message = ?
+             WHERE id = ?`
+          )
+          .run(jwtToken, recordsCount, now, errorMessage, existing.id);
+        getLogger().info(`📥 Updated existing retry queue item: ${existing.id} (was ${existing.status})`);
+        return;
+      }
 
       const id = uuidv4();
-      const now = Date.now();
-
       this.db
         .getDb()
         .prepare(
@@ -837,12 +936,74 @@ export class SparingService {
            (id, send_type, hour_timestamp, payload, records_count, status, retry_count, last_attempt_at, error_message, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(id, sendType, hourTimestamp, jwtToken, hourlyData.data.length, 'pending', 0, now, errorMessage, now);
+        .run(id, sendType, hourTimestamp, jwtToken, recordsCount, 'pending', 0, now, errorMessage, now);
 
       getLogger().info(`📥 Added to retry queue: ${id}`);
     } catch (error: any) {
       getLogger().error('Failed to add to queue:', error.message);
     }
+  }
+
+  /**
+   * Enqueue missed SPARING slots from local historical data (e.g. after multi-day downtime).
+   * Hourly: last BACKFILL_LOOKBACK_DAYS. 2-min: last BACKFILL_2MIN_LOOKBACK_HOURS only (volume).
+   */
+  async backfillMissedSends(): Promise<{ hourly: number; twoMin: number }> {
+    const config = this.getSparingConfig();
+    const result = { hourly: 0, twoMin: 0 };
+    if (!config?.enabled || !config.apiSecret || !config.loggerId) {
+      return result;
+    }
+
+    const now = Date.now();
+    const HOUR_MS = 60 * 60 * 1000;
+    const SLOT_MS = 2 * 60 * 1000;
+    const previousHour = Math.floor((now - HOUR_MS) / HOUR_MS) * HOUR_MS;
+    const reason = 'Backfill: missed send during outage or downtime';
+
+    const hasOpenQueueRow = (sendType: string, hourTimestamp: number): boolean => {
+      const row = this.db
+        .getDb()
+        .prepare(
+          `SELECT 1 as ok FROM sparing_queue
+           WHERE send_type = ? AND hour_timestamp = ? AND status IN ('pending', 'sending', 'failed')
+           LIMIT 1`
+        )
+        .get(sendType, hourTimestamp) as { ok?: number } | undefined;
+      return Boolean(row);
+    };
+
+    if (config.sendMode === 'hourly' || config.sendMode === 'both') {
+      const start =
+        Math.floor((now - SparingService.BACKFILL_LOOKBACK_DAYS * 24 * HOUR_MS) / HOUR_MS) * HOUR_MS;
+      for (let ts = start; ts <= previousHour; ts += HOUR_MS) {
+        if (this.hasAlreadySent('hourly', ts) || hasOpenQueueRow('hourly', ts)) continue;
+        const data = await this.collectHourlyData(ts, { quiet: true });
+        if (!data) continue;
+        await this.addToQueue('hourly', ts, reason, { quietCollect: true });
+        result.hourly += 1;
+      }
+    }
+
+    if (config.sendMode === '2min' || config.sendMode === 'both') {
+      const lookbackStart =
+        Math.floor((now - SparingService.BACKFILL_2MIN_LOOKBACK_HOURS * HOUR_MS) / SLOT_MS) * SLOT_MS;
+      const previousSlot = Math.floor((now - SLOT_MS) / SLOT_MS) * SLOT_MS;
+      for (let ts = lookbackStart; ts <= previousSlot; ts += SLOT_MS) {
+        if (this.hasAlreadySent('2min', ts) || hasOpenQueueRow('2min', ts)) continue;
+        const data = await this.collect2MinData(ts, { quiet: true });
+        if (!data) continue;
+        await this.addToQueue('2min', ts, reason, { quietCollect: true });
+        result.twoMin += 1;
+      }
+    }
+
+    if (result.hourly > 0 || result.twoMin > 0) {
+      getLogger().info(
+        `📦 SPARING backfill queued ${result.hourly} hourly + ${result.twoMin} 2-min slot(s) for resend`
+      );
+    }
+    return result;
   }
 
   private recordSparingApiResponse(responseBody: string, durationMs: number, sendSucceeded: boolean): void {
@@ -882,6 +1043,23 @@ export class SparingService {
 
     const startTime = Date.now();
 
+    // Another path may already have delivered this slot (e.g. main send after older queue row)
+    if (!force && this.hasAlreadySent(item.send_type, item.hour_timestamp)) {
+      this.db
+        .getDb()
+        .prepare(`UPDATE sparing_queue SET status = 'sent', sent_at = ?, error_message = NULL WHERE id = ?`)
+        .run(Date.now(), item.id);
+      this.db
+        .getDb()
+        .prepare(
+          `DELETE FROM sparing_queue
+           WHERE send_type = ? AND hour_timestamp = ? AND id != ? AND status IN ('pending', 'failed', 'sending')`
+        )
+        .run(item.send_type, item.hour_timestamp, item.id);
+      getLogger().info(`⏭️  Queue item ${item.id}: slot already sent — marked sent without resending`);
+      return { success: true };
+    }
+
     try {
       this.db.getDb().prepare('UPDATE sparing_queue SET status = ? WHERE id = ?').run('sending', item.id);
 
@@ -891,6 +1069,15 @@ export class SparingService {
 
       if (response.status) {
         this.db.getDb().prepare('UPDATE sparing_queue SET status = ?, sent_at = ? WHERE id = ?').run('sent', Date.now(), item.id);
+        this.markSlotSent(item.send_type, item.hour_timestamp);
+        // Drop any duplicate pending/failed rows for the same slot after success
+        this.db
+          .getDb()
+          .prepare(
+            `DELETE FROM sparing_queue
+             WHERE send_type = ? AND hour_timestamp = ? AND id != ? AND status IN ('pending', 'failed', 'sending')`
+          )
+          .run(item.send_type, item.hour_timestamp, item.id);
         getLogger().info(`✅ Queue item ${item.id} sent successfully`);
         return { success: true };
       }
@@ -923,31 +1110,68 @@ export class SparingService {
     const config = this.getSparingConfig();
     const maxAttempts = config?.retryMaxAttempts || 5;
 
-    try {
-      if (config?.enabled && (await this.isSparingHostReachable())) {
-        const allFailed = Boolean(config.retryAllFailedOnReconnect);
-        const requeued = this.requeueFailedItemsAfterReconnect(allFailed);
-        if (requeued > 0) {
-          getLogger().info(
-            allFailed
-              ? `📶 SPARING host reachable: re-queued ${requeued} failed item(s) (all failures) for retry`
-              : `📶 SPARING host reachable: re-queued ${requeued} failed item(s) that look like network outages for retry`
-          );
-        }
-      }
-    } catch (e: any) {
-      getLogger().warn('SPARING reconnect re-queue check failed:', e?.message);
+    const reachable = config?.enabled ? await this.isSparingHostReachable() : false;
+
+    // While offline: keep queue intact and do not burn retry_count
+    if (!reachable) {
+      this.lastHostReachable = false;
+      getLogger().info(
+        '📴 SPARING host unreachable — skipping queue send (pending items kept, retries not consumed)'
+      );
+      return;
     }
 
+    const justRecovered = this.lastHostReachable === false;
+    const coldStart = this.lastHostReachable === null;
+    this.lastHostReachable = true;
+
+    try {
+      // After outage or app restart: re-open failed rows (always on cold start / reconnect)
+      const requeueAll =
+        justRecovered || coldStart || Boolean(config?.retryAllFailedOnReconnect);
+      const requeued = this.requeueFailedItemsAfterReconnect(requeueAll);
+      if (requeued > 0) {
+        getLogger().info(
+          justRecovered || coldStart
+            ? `📶 SPARING recovery: re-queued ${requeued} failed item(s) after outage/restart`
+            : requeueAll
+              ? `📶 SPARING host reachable: re-queued ${requeued} failed item(s) (all failures) for retry`
+              : `📶 SPARING host reachable: re-queued ${requeued} failed item(s) that look like network outages for retry`
+        );
+      }
+
+      if (justRecovered || coldStart) {
+        const reset = this.db
+          .getDb()
+          .prepare(`UPDATE sparing_queue SET retry_count = 0 WHERE status = 'pending'`)
+          .run();
+        if (reset.changes > 0) {
+          getLogger().info(`📶 Reset retry_count on ${reset.changes} pending queue item(s) after reconnect/restart`);
+        }
+      }
+
+      const shouldBackfill =
+        justRecovered ||
+        coldStart ||
+        Date.now() - this.lastBackfillAt >= SparingService.BACKFILL_COOLDOWN_MS;
+      if (shouldBackfill) {
+        await this.backfillMissedSends();
+        this.lastBackfillAt = Date.now();
+      }
+    } catch (e: any) {
+      getLogger().warn('SPARING reconnect / backfill failed:', e?.message);
+    }
+
+    const batchLimit = justRecovered || coldStart ? 20 : 10;
     const pending = this.db
       .getDb()
       .prepare(
         `SELECT * FROM sparing_queue 
          WHERE status = 'pending' AND retry_count < ? 
          ORDER BY created_at ASC 
-         LIMIT 10`
+         LIMIT ?`
       )
-      .all(maxAttempts) as any[];
+      .all(maxAttempts, batchLimit) as any[];
 
     getLogger().info(`🔄 Processing ${pending.length} pending queue items... (max attempts: ${maxAttempts})`);
 
@@ -1216,6 +1440,13 @@ export class SparingService {
       this.processQueue();
     }, retryIntervalMs);
 
+    // Run recovery soon after start (backfill + drain queue if online)
+    setTimeout(() => {
+      void this.processQueue().catch((e: any) => {
+        getLogger().warn('SPARING startup queue/backfill failed:', e?.message);
+      });
+    }, 15_000);
+
     getLogger().info(`✅ Scheduler will run in ${Math.round(msUntilNextHour / 1000 / 60)} minutes`);
     getLogger().info(`✅ Retry scheduler will run every ${retryIntervalMinutes} minutes`);
   }
@@ -1353,15 +1584,10 @@ export class SparingService {
     }
 
     try {
-      // Duplicate guard: do not send for the same 2-minute slot twice
-      const last2 = (config as any).last2MinSend as number | undefined;
-      if (last2) {
-        const lastSlot = last2 - (last2 % (2 * 60 * 1000));
-        const thisSlot = slotTimestamp - (slotTimestamp % (2 * 60 * 1000));
-        if (lastSlot === thisSlot) {
-          getLogger().info('⏭️  Skipping 2-minute send: already sent for this slot');
-          return;
-        }
+      // Duplicate guard: config marker, successful queue row, or success log for this slot
+      if (this.hasAlreadySent('2min', slotTimestamp)) {
+        getLogger().info('⏭️  Skipping 2-minute send: already sent for this slot');
+        return;
       }
 
       const twoMinData = await this.collect2MinData(slotTimestamp);
@@ -1428,9 +1654,7 @@ export class SparingService {
       if (response.status) {
         getLogger().info(`✅ 2-minute data sent successfully in ${duration}ms`);
 
-        // Store the slotTimestamp that was sent, not the current time
-        // This ensures the duplicate guard works correctly for the next slot
-        this.upsertSparingConfig({ last2MinSend: slotTimestamp } as any);
+        this.markSlotSent('2min', slotTimestamp);
 
         this.logSend('2min', slotTimestamp, twoMinData.data.length, 'success', JSON.stringify(response), duration);
       } else {
