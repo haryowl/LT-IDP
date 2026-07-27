@@ -19,6 +19,7 @@ import type {
   BufferItem,
   RealtimeData,
 } from '../types';
+import { getLogger } from './logger';
 
 /** Disk space for the volume holding the database (Node fs.statfsSync when available). */
 export type DataStorageDiskInfo = {
@@ -1903,7 +1904,18 @@ export class DatabaseService {
 
   /** Reclaim SQLite file space after large deletes (exclusive; can be slow). */
   vacuumDatabase(): void {
-    this.db.exec('VACUUM');
+    const log = getLogger();
+    const started = Date.now();
+    log.info('[data] VACUUM started (reclaim SQLite file space)');
+    try {
+      this.db.exec('VACUUM');
+      const durationMs = Date.now() - started;
+      log.info(`[data] VACUUM finished successfully in ${durationMs}ms`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log.error(`[data] VACUUM failed after ${Date.now() - started}ms:`, msg);
+      throw e;
+    }
   }
 
   /** Remove CSV/JSON exports in exportDir older than cutoffMs (by mtime). */
