@@ -219,7 +219,7 @@ const Login: React.FC = () => {
           label={
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#22c55e' }} />
-              Secure Enterprise Access
+              Secure Client Access
             </Box>
           }
           size="small"
@@ -401,7 +401,7 @@ const Login: React.FC = () => {
                 color: '#9aa0b8',
               }}
             >
-              ENTERPRISE EDITION
+              CLIENT EDITION
             </Typography>
             <Box sx={{ flex: 1, height: 1, bgcolor: '#eceef5' }} />
           </Box>
