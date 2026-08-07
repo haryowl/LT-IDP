@@ -24,6 +24,7 @@ import { useAuthStore } from '../store/authStore';
 import { useErrorSnackbar } from '../contexts/ErrorSnackbarContext';
 import api from '../api/client';
 import packageJson from '../../package.json';
+import logoLt from '../assets/LogoLT.svg';
 
 const REMEMBER_KEY = 'lt-idp-remember-username';
 const FONT = '"Plus Jakarta Sans", "Segoe UI", sans-serif';
@@ -143,21 +144,17 @@ const Login: React.FC = () => {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2.5 }}>
           <Box sx={{ position: 'relative' }}>
             <Box
+              component="img"
+              src={logoLt}
+              alt="LT logo"
               sx={{
                 width: 56,
                 height: 56,
-                borderRadius: '16px',
-                background: 'linear-gradient(145deg, #7c6cf0 0%, #5b4fd6 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 10px 24px rgba(91, 79, 214, 0.35)',
+                objectFit: 'contain',
+                display: 'block',
+                borderRadius: '12px',
               }}
-            >
-              <Typography sx={{ color: '#fff', fontWeight: 800, fontSize: '1.35rem', fontFamily: FONT, letterSpacing: '-0.02em' }}>
-                LT
-              </Typography>
-            </Box>
+            />
             <Box
               sx={{
                 position: 'absolute',
