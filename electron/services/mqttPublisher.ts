@@ -776,6 +776,10 @@ export class MqttPublisherService extends EventEmitter {
       const latestDataItem = batch[batch.length - 1];
       const payload = this.formatPayload(publisher, latestDataItem, batch, publisherId);
 
+      if (!payload || payload === 'undefined' || payload === 'null') {
+        throw new Error('Scheduled publish produced empty payload');
+      }
+
       log.info(`   📄 [MQTT PUBLISHER] "${publisher.name}" Scheduled JSON Payload:`);
       try {
         const parsed = JSON.parse(payload);

@@ -1719,26 +1719,84 @@ export class DatabaseService {
     }
   }
 
-  queryHistoricalData(startTime: number, endTime: number, mappingIds: string[] = []): HistoricalData[] {
-    console.log('Querying historical data:', {
-      startTime,
-      endTime,
-      startDate: new Date(startTime).toISOString(),
-      endDate: new Date(endTime).toISOString(),
-      mappingIds,
-    });
+  private parseHistoricalValue(raw: unknown): unknown {
+    if (typeof raw !== 'string') return raw;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
 
-    const totalRecords = this.db.prepare('SELECT COUNT(*) as count FROM historical_data').get() as { count: number };
-    console.log(`📊 Total historical data records in database: ${totalRecords.count}`);
+  /**
+   * Lightweight range query for publisher scheduled ticks (no full-table COUNTs).
+   * Inclusive start / exclusive end to match schedule windows [from, to).
+   */
+  queryHistoricalDataRange(
+    startTime: number,
+    endTimeExclusive: number,
+    mappingIds: string[] = [],
+    limit = 5000
+  ): HistoricalData[] {
+    let query = `SELECT * FROM historical_data WHERE timestamp >= ? AND timestamp < ?`;
+    const params: any[] = [startTime, endTimeExclusive];
 
     if (mappingIds.length > 0) {
       const placeholders = mappingIds.map(() => '?').join(',');
-      const mappingRecords = this.db
-        .prepare(`SELECT COUNT(*) as count FROM historical_data WHERE mapping_id IN (${placeholders})`)
-        .get(...mappingIds) as { count: number };
-      console.log(`📊 Records for selected mappings: ${mappingRecords.count}`);
+      query += ` AND mapping_id IN (${placeholders})`;
+      params.push(...mappingIds);
     }
 
+    query += ' ORDER BY timestamp ASC LIMIT ?';
+    params.push(limit);
+
+    const rows = this.db.prepare(query).all(...params) as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      mappingId: row.mapping_id,
+      timestamp: row.timestamp,
+      value: this.parseHistoricalValue(row.value),
+      quality: row.quality,
+    }));
+  }
+
+  /** Latest historical row per mapping inside [startTime, endTimeExclusive). */
+  getLatestHistoricalDataInRange(
+    startTime: number,
+    endTimeExclusive: number,
+    mappingIds: string[]
+  ): Map<string, HistoricalData> {
+    const result = new Map<string, HistoricalData>();
+    if (mappingIds.length === 0 || endTimeExclusive <= startTime) {
+      return result;
+    }
+
+    const placeholders = mappingIds.map(() => '?').join(',');
+    const query = `
+      SELECT h1.* FROM historical_data h1
+      INNER JOIN (
+        SELECT mapping_id, MAX(timestamp) as max_timestamp
+        FROM historical_data
+        WHERE timestamp >= ? AND timestamp < ?
+          AND mapping_id IN (${placeholders})
+        GROUP BY mapping_id
+      ) h2 ON h1.mapping_id = h2.mapping_id AND h1.timestamp = h2.max_timestamp
+    `;
+
+    const rows = this.db.prepare(query).all(startTime, endTimeExclusive, ...mappingIds) as any[];
+    rows.forEach((row) => {
+      result.set(row.mapping_id, {
+        id: row.id,
+        mappingId: row.mapping_id,
+        timestamp: row.timestamp,
+        value: this.parseHistoricalValue(row.value),
+        quality: row.quality,
+      });
+    });
+    return result;
+  }
+
+  queryHistoricalData(startTime: number, endTime: number, mappingIds: string[] = []): HistoricalData[] {
     let query = `SELECT * FROM historical_data WHERE timestamp >= ? AND timestamp <= ?`;
     const params: any[] = [startTime, endTime];
 
@@ -1749,17 +1807,14 @@ export class DatabaseService {
     }
 
     query += ' ORDER BY timestamp ASC';
-    console.log('SQL Query:', query);
-    console.log('Parameters:', params);
 
     const rows = this.db.prepare(query).all(...params) as any[];
-    console.log(`Found ${rows.length} historical data records`);
 
     return rows.map((row) => ({
       id: row.id,
       mappingId: row.mapping_id,
       timestamp: row.timestamp,
-      value: JSON.parse(row.value),
+      value: this.parseHistoricalValue(row.value),
       quality: row.quality,
     }));
   }
@@ -1789,7 +1844,7 @@ export class DatabaseService {
         id: row.id,
         mappingId: row.mapping_id,
         timestamp: row.timestamp,
-        value: JSON.parse(row.value),
+        value: this.parseHistoricalValue(row.value),
         quality: row.quality,
       });
     });

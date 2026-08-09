@@ -150,6 +150,11 @@ function buildSnapshotBatch(
   return batch;
 }
 
+/**
+ * Compact window batch: latest value per mapping inside [from, to).
+ * Full raw sample dumps break MQTT/custom templates when devices poll frequently;
+ * scheduled sends must stay snapshot-shaped like realtime mode.
+ */
 function buildWindowBatch(
   db: DatabaseService,
   publisher: Publisher,
@@ -159,44 +164,40 @@ function buildWindowBatch(
   bucketTs: number,
   effectiveMappingIds: string[]
 ): RealtimeData[] {
-  const historicalRows = db.queryHistoricalData(from, Math.max(from, to - 1), effectiveMappingIds);
+  const latestInWindow = db.getLatestHistoricalDataInRange(from, to, effectiveMappingIds);
   const bufferItems = db.getPendingBufferItemsInWindow(publisherId, from, to, 5000);
   const mappings = db.getParameterMappings();
   const mappingById = new Map(mappings.map((m) => [m.id, m]));
-  const batch: RealtimeData[] = [];
+  const latestByMapping = new Map<string, RealtimeData>();
 
-  for (const row of historicalRows) {
-    const mapping = mappingById.get(row.mappingId);
+  for (const [mappingId, row] of latestInWindow.entries()) {
+    const mapping = mappingById.get(mappingId);
     if (!mapping) continue;
-    batch.push(rowToRealtimeData(row, mapping, row.timestamp));
+    latestByMapping.set(mappingId, rowToRealtimeData(row, mapping, bucketTs));
   }
   for (const item of bufferItems) {
     const d = item.data as RealtimeData;
+    if (!d?.mappingId) continue;
     if (publisher.mappingIds.length > 0 && !publisher.mappingIds.includes(d.mappingId)) continue;
-    batch.push(d);
+    latestByMapping.set(d.mappingId, {
+      ...d,
+      timestamp: bucketTs,
+    });
   }
 
-  const seen = new Set<string>();
-  const deduped: RealtimeData[] = [];
-  for (const d of batch) {
-    const key = `${d.mappingId}|${d.timestamp}|${JSON.stringify(d.value)}|${d.quality}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(d);
-  }
-
-  deduped.forEach((d) => {
-    d.timestamp = bucketTs;
-  });
-  deduped.sort((a, b) => a.timestamp - b.timestamp);
-  return deduped;
+  return Array.from(latestByMapping.values()).sort((a, b) =>
+    a.mappingName.localeCompare(b.mappingName)
+  );
 }
 
 /**
  * One batch per scheduled tick, according to publisher mode:
- * - realtime: latest historical value per mapping
- * - buffer: all rows in the schedule window (historical + pending buffer queue)
- * - both: window rows if any, otherwise latest snapshot
+ * - realtime: latest historical value per mapping (global)
+ * - buffer: latest value per mapping inside the schedule window
+ * - both: window latest-per-mapping if any, otherwise global snapshot
+ *
+ * Window collection is isolated so a bad/slow history query cannot block the
+ * realtime fallback used by mode "both".
  */
 export function collectScheduledPublishBatch(
   db: DatabaseService,
@@ -205,16 +206,25 @@ export function collectScheduledPublishBatch(
   window: { from: number; to: number; bucketTs: number },
   effectiveMappingIds: string[]
 ): RealtimeData[] {
-  const mode = publisher.mode || 'realtime';
+  const mode = (publisher.mode || 'realtime').toLowerCase();
   const { from, to, bucketTs } = window;
 
   if (mode === 'realtime') {
     return buildSnapshotBatch(db, effectiveMappingIds, bucketTs);
   }
-  if (mode === 'buffer') {
-    return buildWindowBatch(db, publisher, publisherId, from, to, bucketTs, effectiveMappingIds);
+
+  let windowBatch: RealtimeData[] = [];
+  try {
+    windowBatch = buildWindowBatch(db, publisher, publisherId, from, to, bucketTs, effectiveMappingIds);
+  } catch {
+    windowBatch = [];
   }
-  const windowBatch = buildWindowBatch(db, publisher, publisherId, from, to, bucketTs, effectiveMappingIds);
+
+  if (mode === 'buffer') {
+    return windowBatch;
+  }
+
+  // both (default for unknown modes): prefer window values, else live snapshot
   if (windowBatch.length > 0) return windowBatch;
   return buildSnapshotBatch(db, effectiveMappingIds, bucketTs);
 }

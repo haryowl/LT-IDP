@@ -713,8 +713,8 @@ const Publishers: React.FC = () => {
                 When enabled, the publisher sends <strong>once per schedule interval</strong> (aligned to clock boundaries, e.g. every 5 minutes).
                 The buffer flush interval is <strong>not used</strong>. Save, then <strong>stop and start</strong> the publisher if it is already running.
                 Content depends on <strong>Publishing Mode</strong>:{' '}
-                <em>Realtime</em> = latest historical value per mapping; <em>Buffer</em> = all samples in that interval from history + queue;{' '}
-                <em>Both</em> = interval samples if any, otherwise latest snapshot.
+                <em>Realtime</em> = latest value per mapping; <em>Buffer</em> = latest value per mapping from that interval (history + queue);{' '}
+                <em>Both</em> = interval values if any, otherwise latest snapshot. After offline gaps, the schedule catches up one interval per tick.
               </Typography>
               <FormControlLabel
                 control={
