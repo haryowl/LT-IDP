@@ -12,6 +12,7 @@ import { AuthService } from './services/auth';
 import { SparingService } from './services/sparingService';
 import { TmatService } from './services/tmatService';
 import { EmailNotificationService } from './services/emailNotificationService';
+import { WhatsAppNotificationService } from './services/whatsappNotificationService';
 import { ThresholdPublishService } from './services/thresholdPublish';
 import { getSystemInfo } from './services/systemInfo';
 import { setupConsoleLogging, getLogger } from './services/logger';
@@ -56,6 +57,7 @@ let dataMapperService: DataMapperService;
 let sparingService: SparingService;
 let tmatService: TmatService;
 let emailNotificationService: EmailNotificationService;
+let whatsappNotificationService: WhatsAppNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 
 function createWindow() {
@@ -99,6 +101,7 @@ async function initializeServices() {
   sparingService = new SparingService(dbService);
   tmatService = new TmatService(dbService);
   emailNotificationService = new EmailNotificationService(dbService, () => getLogger().getCurrentLogFile());
+  whatsappNotificationService = new WhatsAppNotificationService(dbService);
   sparingService.setSendLoggedCallback((info) => {
     void emailNotificationService.onSparingSendLogged(info);
   });
@@ -106,6 +109,9 @@ async function initializeServices() {
     ...modbusService.getConnectionStatus(),
     ...mqttSubscriberService.getConnectionStatus(),
   ]);
+  thresholdPublishService.setOnTriggered((rule, trigger) =>
+    whatsappNotificationService.notifyThresholdAlert(rule, trigger)
+  );
   thresholdPublishService.startPeriodicCheck();
 
   // Start SPARING scheduler if enabled
@@ -142,6 +148,21 @@ async function initializeServices() {
       logger.error('Email schedule tick failed:', e?.message);
     }
   }, 60 * 1000);
+
+  setInterval(() => {
+    try {
+      whatsappNotificationService.tickDiskHealth();
+    } catch (e: any) {
+      logger.error('WhatsApp disk health tick failed:', e?.message);
+    }
+  }, 15 * 60 * 1000);
+  setTimeout(() => {
+    try {
+      whatsappNotificationService.tickDiskHealth();
+    } catch {
+      /* ignore */
+    }
+  }, 30_000);
 
   runScheduledDataRetention(dbService);
   setInterval(() => runScheduledDataRetention(dbService), 6 * 60 * 60 * 1000);
@@ -911,6 +932,13 @@ function setupIpcHandlers() {
     return emailNotificationService.getSettingsForApi();
   });
   ipcMain.handle('emailNotifications:test', async () => emailNotificationService.testEmail());
+
+  ipcMain.handle('whatsappNotifications:get', async () => whatsappNotificationService.getSettingsForApi());
+  ipcMain.handle('whatsappNotifications:save', async (_, body) => {
+    whatsappNotificationService.saveSettings(body || {});
+    return whatsappNotificationService.getSettingsForApi();
+  });
+  ipcMain.handle('whatsappNotifications:test', async () => whatsappNotificationService.testWhatsApp());
 }
 
 app.whenReady().then(async () => {

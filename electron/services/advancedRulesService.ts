@@ -20,6 +20,8 @@ export type AdvancedRulesServiceDeps = {
   httpClient?: HttpClientService;
   publishEvent?: (evt: AdvancedRuleEvent) => void;
   modbusWrite?: (payload: { deviceId: string; registerId: string; value: unknown }) => Promise<void>;
+  /** Optional WhatsApp / external notify when a rule with alert action fires. */
+  onAlertEvent?: (evt: AdvancedRuleEvent, hasAlertAction: boolean) => void | Promise<void>;
 };
 
 type ValueCacheItem = {
@@ -441,6 +443,10 @@ export class AdvancedRulesService extends EventEmitter {
       this.db.updateAdvancedRule(rule.id, { lastTriggeredAt: now });
       const updated: AdvancedRule = { ...rule, lastTriggeredAt: now, updatedAt: now };
       this.rules.set(rule.id, updated);
+
+      if (this.deps.onAlertEvent) {
+        void this.deps.onAlertEvent(inserted, !!rule.actions?.alert);
+      }
 
       await this.fireActions(updated, inserted);
     } catch (e: any) {

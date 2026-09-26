@@ -19,6 +19,7 @@ import { DataMapperService } from '../electron/services/dataMapper';
 import { SparingService } from '../electron/services/sparingService';
 import { TmatService } from '../electron/services/tmatService';
 import { EmailNotificationService } from '../electron/services/emailNotificationService';
+import { WhatsAppNotificationService } from '../electron/services/whatsappNotificationService';
 import { ThresholdPublishService } from '../electron/services/thresholdPublish';
 import { AdvancedRulesService } from '../electron/services/advancedRulesService';
 import { getLogger } from '../electron/services/logger';
@@ -347,6 +348,7 @@ let dataMapperService: DataMapperService;
 let sparingService: SparingService;
 let tmatService: TmatService;
 let emailNotificationService!: EmailNotificationService;
+let whatsappNotificationService!: WhatsAppNotificationService;
 let thresholdPublishService: ThresholdPublishService;
 let gnssService: GnssService;
 let advancedRulesService: AdvancedRulesService;
@@ -1209,6 +1211,19 @@ app.post('/api/email-notifications/test', authMiddleware, async (req, res) => {
   else res.status(400).json(r);
 });
 
+app.get('/api/whatsapp-notifications', authMiddleware, (req, res) => {
+  res.json(whatsappNotificationService.getSettingsForApi());
+});
+app.post('/api/whatsapp-notifications', authMiddleware, (req, res) => {
+  whatsappNotificationService.saveSettings(req.body || {});
+  res.json(whatsappNotificationService.getSettingsForApi());
+});
+app.post('/api/whatsapp-notifications/test', authMiddleware, async (req, res) => {
+  const r = await whatsappNotificationService.testWhatsApp();
+  if (r.ok) res.json(r);
+  else res.status(400).json(r);
+});
+
 // ---------- Public Dashboard (read-only token) ----------
 app.get('/api/public/mappings', readOnlyMiddleware, (req, res) => {
   const mappings = dbService.getParameterMappings().map((m: any) => ({
@@ -1315,6 +1330,7 @@ server.on('upgrade', (req, socket, head) => {
   sparingService = new SparingService(dbService);
   tmatService = new TmatService(dbService);
   emailNotificationService = new EmailNotificationService(dbService, () => logger.getCurrentLogFile());
+  whatsappNotificationService = new WhatsAppNotificationService(dbService);
   sparingService.setSendLoggedCallback((info) => {
     void emailNotificationService.onSparingSendLogged(info);
   });
@@ -1325,10 +1341,28 @@ server.on('upgrade', (req, socket, head) => {
       logger.error('Email schedule tick:', errMsg(e));
     }
   }, 60 * 1000);
+  setInterval(() => {
+    try {
+      whatsappNotificationService.tickDiskHealth();
+    } catch (e: any) {
+      logger.error('WhatsApp disk health tick:', errMsg(e));
+    }
+  }, 15 * 60 * 1000);
+  // Run once shortly after boot
+  setTimeout(() => {
+    try {
+      whatsappNotificationService.tickDiskHealth();
+    } catch {
+      /* ignore */
+    }
+  }, 30_000);
   thresholdPublishService = new ThresholdPublishService(dbService, httpClientService, () => [
     ...modbusService.getConnectionStatus(),
     ...mqttSubscriberService.getConnectionStatus(),
   ]);
+  thresholdPublishService.setOnTriggered((rule, trigger) =>
+    whatsappNotificationService.notifyThresholdAlert(rule, trigger)
+  );
   thresholdPublishService.startPeriodicCheck();
   advancedRulesService = new AdvancedRulesService(dbService, {
     dataDir: DATA_DIR,
@@ -1336,6 +1370,7 @@ server.on('upgrade', (req, socket, head) => {
     httpClient: httpClientService,
     publishEvent: (evt) => broadcast({ type: 'advanced-rule:event', data: evt }),
     modbusWrite: ({ deviceId, registerId, value }) => modbusService.writeMappedRegister(deviceId, registerId, value),
+    onAlertEvent: (evt, hasAlert) => whatsappNotificationService.notifyAdvancedAlert(evt, hasAlert),
   });
 
   broadcast = (msg: { type: string; data?: any }) => {

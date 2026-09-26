@@ -21,6 +21,7 @@ import MqttBroker from './pages/MqttBroker';
 import LogTerminal from './pages/LogTerminal';
 import Settings from './pages/Settings';
 import EmailNotifications from './pages/EmailNotifications';
+import WhatsAppNotifications from './pages/WhatsAppNotifications';
 import PublicDashboard from './pages/PublicDashboard';
 
 function KlhGuard({ children }: { children: React.ReactNode }) {
@@ -101,6 +102,7 @@ function App() {
           <Route path="sparing" element={<KlhGuard><SparingConfig /></KlhGuard>} />
           <Route path="tmat" element={<KlhGuard><TmatConfig /></KlhGuard>} />
           <Route path="email-notifications" element={<AdminGuard><EmailNotifications /></AdminGuard>} />
+          <Route path="whatsapp-notifications" element={<AdminGuard><WhatsAppNotifications /></AdminGuard>} />
           <Route path="mqtt-broker" element={<MqttBroker />} />
           <Route path="log-terminal" element={<LogTerminal />} />
           <Route path="settings" element={<Settings />} />

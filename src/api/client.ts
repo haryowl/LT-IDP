@@ -289,6 +289,20 @@ export const api = {
         ? (window as any).electronAPI.emailNotifications.test()
         : request('POST', '/email-notifications/test'),
   },
+  whatsappNotifications: {
+    get: () =>
+      isElectron
+        ? (window as any).electronAPI.whatsappNotifications.get()
+        : request('GET', '/whatsapp-notifications'),
+    save: (body: any) =>
+      isElectron
+        ? (window as any).electronAPI.whatsappNotifications.save(body)
+        : request('POST', '/whatsapp-notifications', body),
+    test: () =>
+      isElectron
+        ? (window as any).electronAPI.whatsappNotifications.test()
+        : request('POST', '/whatsapp-notifications/test'),
+  },
   on: (channel: string, callback: (...args: any[]) => void) => {
     if (isElectron) return (window as any).electronAPI.on(channel, callback);
     if (channel === 'data:realtime') return api.data.onRealtimeData(callback);

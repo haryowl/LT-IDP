@@ -28,6 +28,11 @@ export class ThresholdPublishService extends EventEmitter {
   private firstDisconnectedAt = new Map<string, number>();
   private periodicCheckIntervalId: ReturnType<typeof setInterval> | null = null;
   private readonly checkIntervalMs = 10_000;
+  /** Optional side-channel (e.g. WhatsApp) after a real trigger succeeds. */
+  private onTriggered?: (
+    rule: ThresholdPublishRule,
+    trigger: ThresholdTriggerContext
+  ) => void | Promise<void>;
 
   constructor(
     private db: DatabaseService,
@@ -36,6 +41,12 @@ export class ThresholdPublishService extends EventEmitter {
   ) {
     super();
     this.reloadRules();
+  }
+
+  setOnTriggered(
+    cb?: (rule: ThresholdPublishRule, trigger: ThresholdTriggerContext) => void | Promise<void>
+  ): void {
+    this.onTriggered = cb;
   }
 
   startPeriodicCheck(): void {
@@ -414,6 +425,10 @@ export class ThresholdPublishService extends EventEmitter {
     this.db.updateThresholdPublishRule(rule.id, { lastTriggeredAt: now });
     rule.lastTriggeredAt = now;
     this.rules.set(rule.id, rule);
+
+    if (!isTest && this.onTriggered) {
+      void this.onTriggered(rule, trigger);
+    }
 
     this.emit('log', {
       type: 'threshold-rule',

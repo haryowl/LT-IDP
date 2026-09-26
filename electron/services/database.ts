@@ -808,6 +808,38 @@ export class DatabaseService {
     } catch (e: any) {
       console.warn('email_notification_settings seed:', e?.message);
     }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS whatsapp_notification_settings (
+        id TEXT PRIMARY KEY,
+        enabled INTEGER DEFAULT 0,
+        api_base_url TEXT DEFAULT 'https://jogja.wablas.com',
+        token TEXT,
+        secret_key TEXT,
+        phone_numbers TEXT,
+        notify_threshold_alerts INTEGER DEFAULT 1,
+        notify_advanced_alerts INTEGER DEFAULT 1,
+        notify_disk_low INTEGER DEFAULT 1,
+        disk_free_percent_threshold REAL DEFAULT 10,
+        cooldown_minutes INTEGER DEFAULT 30,
+        last_threshold_sent_at INTEGER,
+        last_advanced_sent_at INTEGER,
+        last_disk_alert_at INTEGER,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    try {
+      const waEx = this.db.prepare('SELECT 1 FROM whatsapp_notification_settings WHERE id = ?').get('default');
+      if (!waEx) {
+        this.db
+          .prepare(
+            `INSERT INTO whatsapp_notification_settings (id, api_base_url, updated_at) VALUES ('default', 'https://jogja.wablas.com', ?)`
+          )
+          .run(Date.now());
+      }
+    } catch (e: any) {
+      console.warn('whatsapp_notification_settings seed:', e?.message);
+    }
   }
 
   async createDefaultUser(): Promise<void> {
@@ -2585,6 +2617,139 @@ export class DatabaseService {
   setEmailLastTriggerSent(at: number): void {
     this.db
       .prepare('UPDATE email_notification_settings SET last_trigger_sent_at = ? WHERE id = ?')
+      .run(at, 'default');
+  }
+
+  getWhatsAppNotificationSettings(): {
+    id: string;
+    enabled: boolean;
+    apiBaseUrl: string;
+    token: string;
+    secretKey: string;
+    phoneNumbers: string;
+    notifyThresholdAlerts: boolean;
+    notifyAdvancedAlerts: boolean;
+    notifyDiskLow: boolean;
+    diskFreePercentThreshold: number;
+    cooldownMinutes: number;
+    lastThresholdSentAt: number | null;
+    lastAdvancedSentAt: number | null;
+    lastDiskAlertAt: number | null;
+    updatedAt: number;
+  } {
+    const row = this.db.prepare('SELECT * FROM whatsapp_notification_settings WHERE id = ?').get('default') as any;
+    if (!row) {
+      return {
+        id: 'default',
+        enabled: false,
+        apiBaseUrl: 'https://jogja.wablas.com',
+        token: '',
+        secretKey: '',
+        phoneNumbers: '',
+        notifyThresholdAlerts: true,
+        notifyAdvancedAlerts: true,
+        notifyDiskLow: true,
+        diskFreePercentThreshold: 10,
+        cooldownMinutes: 30,
+        lastThresholdSentAt: null,
+        lastAdvancedSentAt: null,
+        lastDiskAlertAt: null,
+        updatedAt: 0,
+      };
+    }
+    return {
+      id: row.id,
+      enabled: Boolean(row.enabled),
+      apiBaseUrl: row.api_base_url || 'https://jogja.wablas.com',
+      token: row.token || '',
+      secretKey: row.secret_key || '',
+      phoneNumbers: row.phone_numbers || '',
+      notifyThresholdAlerts: row.notify_threshold_alerts == null ? true : Boolean(row.notify_threshold_alerts),
+      notifyAdvancedAlerts: row.notify_advanced_alerts == null ? true : Boolean(row.notify_advanced_alerts),
+      notifyDiskLow: row.notify_disk_low == null ? true : Boolean(row.notify_disk_low),
+      diskFreePercentThreshold:
+        typeof row.disk_free_percent_threshold === 'number' ? row.disk_free_percent_threshold : 10,
+      cooldownMinutes: Math.max(1, row.cooldown_minutes ?? 30),
+      lastThresholdSentAt: row.last_threshold_sent_at ?? null,
+      lastAdvancedSentAt: row.last_advanced_sent_at ?? null,
+      lastDiskAlertAt: row.last_disk_alert_at ?? null,
+      updatedAt: row.updated_at ?? 0,
+    };
+  }
+
+  upsertWhatsAppNotificationSettings(updates: {
+    enabled?: boolean;
+    apiBaseUrl?: string;
+    token?: string;
+    secretKey?: string | null;
+    phoneNumbers?: string;
+    notifyThresholdAlerts?: boolean;
+    notifyAdvancedAlerts?: boolean;
+    notifyDiskLow?: boolean;
+    diskFreePercentThreshold?: number;
+    cooldownMinutes?: number;
+  }): void {
+    const cur = this.getWhatsAppNotificationSettings();
+    const secret =
+      updates.secretKey === undefined || updates.secretKey === ''
+        ? cur.secretKey
+        : updates.secretKey;
+    const now = Date.now();
+    const s = {
+      enabled: updates.enabled !== undefined ? updates.enabled : cur.enabled,
+      apiBaseUrl: updates.apiBaseUrl !== undefined ? updates.apiBaseUrl : cur.apiBaseUrl,
+      token: updates.token !== undefined ? updates.token : cur.token,
+      secretKey: secret,
+      phoneNumbers: updates.phoneNumbers !== undefined ? updates.phoneNumbers : cur.phoneNumbers,
+      notifyThresholdAlerts:
+        updates.notifyThresholdAlerts !== undefined ? updates.notifyThresholdAlerts : cur.notifyThresholdAlerts,
+      notifyAdvancedAlerts:
+        updates.notifyAdvancedAlerts !== undefined ? updates.notifyAdvancedAlerts : cur.notifyAdvancedAlerts,
+      notifyDiskLow: updates.notifyDiskLow !== undefined ? updates.notifyDiskLow : cur.notifyDiskLow,
+      diskFreePercentThreshold:
+        updates.diskFreePercentThreshold !== undefined
+          ? Math.max(0, Math.min(100, updates.diskFreePercentThreshold))
+          : cur.diskFreePercentThreshold,
+      cooldownMinutes:
+        updates.cooldownMinutes !== undefined
+          ? Math.max(1, updates.cooldownMinutes)
+          : cur.cooldownMinutes,
+    };
+    this.db
+      .prepare(
+        `UPDATE whatsapp_notification_settings SET
+          enabled = ?, api_base_url = ?, token = ?, secret_key = ?, phone_numbers = ?,
+          notify_threshold_alerts = ?, notify_advanced_alerts = ?, notify_disk_low = ?,
+          disk_free_percent_threshold = ?, cooldown_minutes = ?, updated_at = ?
+        WHERE id = 'default'`
+      )
+      .run(
+        s.enabled ? 1 : 0,
+        s.apiBaseUrl || 'https://jogja.wablas.com',
+        s.token || null,
+        s.secretKey || null,
+        s.phoneNumbers || null,
+        s.notifyThresholdAlerts ? 1 : 0,
+        s.notifyAdvancedAlerts ? 1 : 0,
+        s.notifyDiskLow ? 1 : 0,
+        s.diskFreePercentThreshold,
+        s.cooldownMinutes,
+        now
+      );
+  }
+
+  setWhatsAppLastSent(
+    kind: 'threshold' | 'advanced' | 'disk',
+    at: number
+  ): void {
+    const col =
+      kind === 'threshold'
+        ? 'last_threshold_sent_at'
+        : kind === 'advanced'
+          ? 'last_advanced_sent_at'
+          : 'last_disk_alert_at';
+    this.db
+      .prepare(`UPDATE whatsapp_notification_settings SET ${col} = ? WHERE id = ?`)
       .run(at, 'default');
   }
 

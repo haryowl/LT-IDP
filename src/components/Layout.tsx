@@ -33,6 +33,7 @@ import {
   Settings as SettingsIcon,
   Terminal as TerminalIcon,
   Email as EmailIcon,
+  WhatsApp as WhatsAppIcon,
 } from '@mui/icons-material';
 import { useAuthStore, type UserRole } from '../store/authStore';
 import api from '../api/client';
@@ -60,6 +61,7 @@ const menuItems: MenuItem[] = [
   { text: 'SPARING', icon: <CloudUploadIcon />, path: '/sparing', roles: ['admin', 'guest'] },
   { text: 'TMAT (KLH)', icon: <CloudUploadIcon />, path: '/tmat', roles: ['admin', 'guest'] },
   { text: 'Email notifications', icon: <EmailIcon />, path: '/email-notifications', roles: ['admin'] },
+  { text: 'WhatsApp notifications', icon: <WhatsAppIcon />, path: '/whatsapp-notifications', roles: ['admin'] },
   { text: 'Log Terminal', icon: <TerminalIcon />, path: '/log-terminal' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];

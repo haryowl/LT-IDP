@@ -162,6 +162,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     save: (body: any) => ipcRenderer.invoke('emailNotifications:save', body),
     test: () => ipcRenderer.invoke('emailNotifications:test'),
   },
+  whatsappNotifications: {
+    get: () => ipcRenderer.invoke('whatsappNotifications:get'),
+    save: (body: any) => ipcRenderer.invoke('whatsappNotifications:save', body),
+    test: () => ipcRenderer.invoke('whatsappNotifications:test'),
+  },
   // Event listeners for real-time data
   on: (channel: string, callback: (...args: any[]) => void) => {
     const subscription = (_event: any, ...args: any[]) => callback(...args);
