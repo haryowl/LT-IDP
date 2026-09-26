@@ -11,8 +11,8 @@ function formatBytes(n: number): string {
 
 /**
  * Scheduled retention: optional max age for historical rows and exports, plus
- * emergency pruning when the host volume reports low free space.
- * Safe to call on a timer; no-op when nothing matches.
+ * routine app/sparing log cleanup, plus emergency pruning when the host volume
+ * reports low free space. Safe to call on a timer; no-op when nothing matches.
  */
 export function runScheduledDataRetention(db: DatabaseService): void {
   const log = getLogger();
@@ -33,6 +33,30 @@ export function runScheduledDataRetention(db: DatabaseService): void {
       if (er.deletedFiles > 0) {
         log.info(
           `[data retention] Removed ${er.deletedFiles} export file(s) older than ${exportDays} day(s), freed ${formatBytes(er.freedBytes)}`
+        );
+      }
+    }
+
+    // Routine log retention (default 14 days) — prevents ~/.config/ClientAPP/logs from growing unboundedly
+    const logRetentionDays = parseInt(db.getSystemConfig('data:logRetentionDays') || '14', 10);
+    if (logRetentionDays > 0) {
+      const lc = Date.now() - logRetentionDays * DAY_MS;
+      const lr = log.deleteRotatedLogFilesOlderThan(lc);
+      if (lr.deletedFiles > 0) {
+        log.info(
+          `[data retention] Removed ${lr.deletedFiles} rotated log file(s) older than ${logRetentionDays} day(s), freed ${formatBytes(lr.freedBytes)}`
+        );
+      }
+    }
+
+    // Optional total size cap for rotated logs (default 2048 MB; 0 = disabled)
+    const logMaxMb = parseInt(db.getSystemConfig('data:logMaxTotalMb') || '2048', 10);
+    if (logMaxMb > 0) {
+      const cap = logMaxMb * 1024 * 1024;
+      const sr = log.deleteOldestRotatedLogsUntilUnderBytes(cap);
+      if (sr.deletedFiles > 0) {
+        log.info(
+          `[data retention] Log size cap ${logMaxMb} MB: removed ${sr.deletedFiles} oldest log file(s), freed ${formatBytes(sr.freedBytes)}`
         );
       }
     }

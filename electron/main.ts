@@ -570,6 +570,8 @@ function setupIpcHandlers() {
     return {
       retentionDays: parseInt(dbService.getSystemConfig('data:retentionDays') || '0', 10),
       exportRetentionDays: parseInt(dbService.getSystemConfig('data:exportRetentionDays') || '30', 10),
+      logRetentionDays: parseInt(dbService.getSystemConfig('data:logRetentionDays') || '14', 10),
+      logMaxTotalMb: parseInt(dbService.getSystemConfig('data:logMaxTotalMb') || '2048', 10),
       lowDiskAutoPurge: (dbService.getSystemConfig('data:lowDiskAutoPurge') || '1') === '1',
       lowDiskFreePctThreshold: parseFloat(dbService.getSystemConfig('data:lowDiskFreePctThreshold') || '5'),
       lowDiskEmergencyKeepDays: parseInt(dbService.getSystemConfig('data:lowDiskEmergencyKeepDays') || '14', 10),
@@ -588,6 +590,16 @@ function setupIpcHandlers() {
       const n = Number(b.exportRetentionDays);
       if (!Number.isFinite(n) || n < 0 || n > 3650) throw new Error('Invalid exportRetentionDays');
       dbService.setSystemConfig('data:exportRetentionDays', String(Math.floor(n)));
+    }
+    if (b.logRetentionDays !== undefined) {
+      const n = Number(b.logRetentionDays);
+      if (!Number.isFinite(n) || n < 0 || n > 3650) throw new Error('Invalid logRetentionDays');
+      dbService.setSystemConfig('data:logRetentionDays', String(Math.floor(n)));
+    }
+    if (b.logMaxTotalMb !== undefined) {
+      const n = Number(b.logMaxTotalMb);
+      if (!Number.isFinite(n) || n < 0 || n > 1_000_000) throw new Error('Invalid logMaxTotalMb');
+      dbService.setSystemConfig('data:logMaxTotalMb', String(Math.floor(n)));
     }
     if (b.lowDiskAutoPurge !== undefined) {
       dbService.setSystemConfig('data:lowDiskAutoPurge', b.lowDiskAutoPurge ? '1' : '0');

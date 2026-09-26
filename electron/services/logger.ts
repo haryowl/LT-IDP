@@ -126,7 +126,9 @@ export class Logger {
     this.log('warn', ...args);
   }
 
+  /** Verbose diagnostics; only written when LT_IDP_DEBUG_LOGS=1 (avoids filling disks in production). */
   debug(...args: any[]): void {
+    if (process.env.LT_IDP_DEBUG_LOGS !== '1') return;
     this.log('debug', ...args);
   }
 
@@ -226,6 +228,72 @@ export class Logger {
         freedBytes += st.size;
         fs.unlinkSync(fp);
         deletedFiles++;
+      } catch {
+        // ignore
+      }
+    }
+    return { deletedFiles, freedBytes };
+  }
+
+  /**
+   * Delete oldest rotated app/sparing logs until total size of those files is under maxBytes.
+   * Never deletes the active app or SPARING log files.
+   */
+  deleteOldestRotatedLogsUntilUnderBytes(maxBytes: number): { deletedFiles: number; freedBytes: number } {
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+      return { deletedFiles: 0, freedBytes: 0 };
+    }
+    const skip = new Set<string>();
+    try {
+      skip.add(fs.realpathSync(this.currentLogFile));
+    } catch {
+      skip.add(this.currentLogFile);
+    }
+    if (this.sparingLogFile) {
+      try {
+        skip.add(fs.realpathSync(this.sparingLogFile));
+      } catch {
+        skip.add(this.sparingLogFile);
+      }
+    }
+    if (!fs.existsSync(this.logDir)) {
+      return { deletedFiles: 0, freedBytes: 0 };
+    }
+    const appRe = /^app-\d{4}-\d{2}-\d{2}\.log$/;
+    const sparingRe = /^sparing-\d{4}-\d{2}-\d{2}\.jsonl$/;
+    type Entry = { fp: string; size: number; mtimeMs: number };
+    const entries: Entry[] = [];
+    let total = 0;
+    for (const name of fs.readdirSync(this.logDir)) {
+      if (!appRe.test(name) && !sparingRe.test(name)) continue;
+      const fp = path.join(this.logDir, name);
+      let resolved = fp;
+      try {
+        resolved = fs.realpathSync(fp);
+      } catch {
+        // use fp
+      }
+      if (skip.has(resolved) || skip.has(fp)) continue;
+      try {
+        const st = fs.statSync(fp);
+        entries.push({ fp, size: st.size, mtimeMs: st.mtimeMs });
+        total += st.size;
+      } catch {
+        // ignore
+      }
+    }
+    if (total <= maxBytes) {
+      return { deletedFiles: 0, freedBytes: 0 };
+    }
+    entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    let deletedFiles = 0;
+    let freedBytes = 0;
+    for (const e of entries) {
+      if (total - freedBytes <= maxBytes) break;
+      try {
+        fs.unlinkSync(e.fp);
+        deletedFiles++;
+        freedBytes += e.size;
       } catch {
         // ignore
       }

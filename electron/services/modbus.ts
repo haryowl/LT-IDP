@@ -480,14 +480,21 @@ export class ModbusService extends EventEmitter {
         const c = connectionNow;
         const runPollReads = async () => {
           c.client.setID(c.device.slaveId);
-          console.log(`Polling ${c.registers.length} registers from ${c.device.name}...`);
+          const verbose = process.env.LT_IDP_VERBOSE_MODBUS === '1';
+          if (verbose) {
+            console.log(`Polling ${c.registers.length} registers from ${c.device.name}...`);
+          }
           let successCount = 0;
           for (const register of c.registers) {
-            console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
+            if (verbose) {
+              console.log(`Reading register: ${register.name} (FC${register.functionCode}, Addr: ${register.address})`);
+            }
             const timestamp = Date.now();
             try {
               const data = await this.readRegister(c.client, register);
-              console.log(`Register ${register.name} value:`, data);
+              if (verbose) {
+                console.log(`Register ${register.name} value:`, data);
+              }
 
               c.lastRecordedData.set(register.id, {
                 value: data,
@@ -549,7 +556,9 @@ export class ModbusService extends EventEmitter {
               return;
             }
           }
-          console.log(`Poll complete. Messages received: ${c.status.messagesReceived}`);
+          if (verbose) {
+            console.log(`Poll complete. Messages received: ${c.status.messagesReceived}`);
+          }
         };
 
         if (c.rtuBusKey) {
@@ -580,7 +589,10 @@ export class ModbusService extends EventEmitter {
 
     const record = async () => {
       try {
-        console.log(`Recording data for device ${connection.device.name}...`);
+        const verbose = process.env.LT_IDP_VERBOSE_MODBUS === '1';
+        if (verbose) {
+          console.log(`Recording data for device ${connection.device.name}...`);
+        }
         for (const [registerId, data] of connection.lastRecordedData.entries()) {
           const payload = {
             deviceId,
@@ -593,7 +605,9 @@ export class ModbusService extends EventEmitter {
           this.emit('dataRecord', payload);
           this.emit(`dataRecord:${deviceId}:${registerId}`, payload);
         }
-        console.log(`Recorded ${connection.lastRecordedData.size} data points for ${connection.device.name}`);
+        if (verbose) {
+          console.log(`Recorded ${connection.lastRecordedData.size} data points for ${connection.device.name}`);
+        }
       } catch (error: any) {
         console.error(`Recording error for device ${connection.device.name}:`, error);
       }

@@ -54,6 +54,8 @@ type StorageSummary = {
 type CleanupSettings = {
   retentionDays: number;
   exportRetentionDays: number;
+  logRetentionDays: number;
+  logMaxTotalMb: number;
   lowDiskAutoPurge: boolean;
   lowDiskFreePctThreshold: number;
   lowDiskEmergencyKeepDays: number;
@@ -292,6 +294,36 @@ const HistoricalData: React.FC = () => {
                     )
                   }
                   helperText="CSV/JSON exports under the exports folder older than this are deleted on the schedule."
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <TextField
+                  label="App log max age (days)"
+                  type="number"
+                  fullWidth
+                  disabled={!isAdmin}
+                  value={cleanupSettings.logRetentionDays}
+                  onChange={(e) =>
+                    setCleanupSettings((c) =>
+                      c ? { ...c, logRetentionDays: Math.max(0, parseInt(e.target.value, 10) || 0) } : c
+                    )
+                  }
+                  helperText="Rotated app-*.log / sparing-*.jsonl older than this are deleted on the schedule. Default 14. 0 = disable age cleanup."
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <TextField
+                  label="App log folder max size (MB)"
+                  type="number"
+                  fullWidth
+                  disabled={!isAdmin}
+                  value={cleanupSettings.logMaxTotalMb}
+                  onChange={(e) =>
+                    setCleanupSettings((c) =>
+                      c ? { ...c, logMaxTotalMb: Math.max(0, parseInt(e.target.value, 10) || 0) } : c
+                    )
+                  }
+                  helperText="If rotated logs exceed this total, oldest files are deleted. Default 2048. 0 = no size cap."
                 />
               </Grid>
               <Grid item xs={12} sm={6} md={4}>

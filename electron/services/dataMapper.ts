@@ -86,7 +86,7 @@ export class DataMapperService extends EventEmitter {
       (mapping) => mapping.sourceType === 'modbus' && mapping.sourceDeviceId === data.deviceId
     );
 
-    getLogger().info(
+    getLogger().debug(
       `Available mappings for device ${data.deviceId}:`,
       allDeviceMappings.map((m) => ({
         id: m.id,
@@ -95,10 +95,10 @@ export class DataMapperService extends EventEmitter {
       }))
     );
 
-    getLogger().info(`Looking for register ${data.registerName} with ID: ${data.registerId}`);
+    getLogger().debug(`Looking for register ${data.registerName} with ID: ${data.registerId}`);
 
     if (relevantMappings.length === 0) {
-      getLogger().info(`No parameter mappings found for register ${data.registerName} (${data.registerId})`);
+      getLogger().debug(`No parameter mappings found for register ${data.registerName} (${data.registerId})`);
       return;
     }
 
