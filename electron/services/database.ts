@@ -1751,7 +1751,7 @@ export class DatabaseService {
     }
   }
 
-  private parseHistoricalValue(raw: unknown): unknown {
+  private parseHistoricalValue(raw: unknown): any {
     if (typeof raw !== 'string') return raw;
     try {
       return JSON.parse(raw);
