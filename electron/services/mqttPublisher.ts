@@ -912,7 +912,7 @@ export class MqttPublisherService extends EventEmitter {
 
   /**
    * When Store History is off (or pruned) for system mappings like datetime/klhk,
-   * scheduled ticks would otherwise publish incomplete payloads. Fill gaps from live sources.
+   * scheduled ticks would otherwise publish incomplete/stale payloads. Prefer live values.
    */
   private enrichScheduledBatchWithLiveSystem(
     batch: RealtimeData[],
@@ -925,26 +925,33 @@ export class MqttPublisherService extends EventEmitter {
     const mappingById = new Map(mappingsList.map((m) => [m.id, m]));
 
     for (const mid of effectiveMappingIds) {
-      if (byId.has(mid)) continue;
       const m = mappingById.get(mid);
       if (!m || m.sourceType !== 'system') continue;
       const sourceId = m.sourceDeviceId || 'system-timestamp';
       let value: unknown;
+      let forceLive = false;
       if (sourceId === 'system-timestamp') {
         value = this.formatSystemTimestampValue(m, Date.now());
+        forceLive = true;
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_RAW) {
         if (!tel.hasSparingResponse()) continue;
         value = tel.getSparingResponseRaw() ?? '';
+        forceLive = true;
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_DESC) {
         if (!tel.hasSparingResponse()) continue;
         value = tel.getSparingResponseDesc() ?? '';
+        forceLive = true;
       } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_STATUS) {
         const st = tel.getSparingResponseStatus();
         if (st == null) continue;
         value = st ? 1 : 0;
+        forceLive = true;
+      } else if (byId.has(mid)) {
+        continue;
       } else {
         continue;
       }
+      if (!forceLive && byId.has(mid)) continue;
       byId.set(mid, {
         mappingId: mid,
         mappingName: m.mappedName,
