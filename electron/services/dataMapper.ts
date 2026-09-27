@@ -5,6 +5,10 @@ import { getLogger } from './logger';
 import { getTransmissionTelemetry, SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
 import type { GnssService } from './gnssService';
 import { getCpuTemperatureC } from './systemInfo';
+import {
+  getSystemTelemetryHistoryIntervalMs,
+  isBulkySystemHistorySource,
+} from './systemHistoryPolicy';
 
 export class DataMapperService extends EventEmitter {
   private mappings: Map<string, ParameterMapping> = new Map();
@@ -12,6 +16,8 @@ export class DataMapperService extends EventEmitter {
   private systemTimestampIntervalMs: number;
   private systemGnssHistoryIntervalMs: number;
   private lastStoredTimestamps: Map<string, number> = new Map();
+  /** Last serialized value written to history (skip identical bulky/system telemetry rows). */
+  private lastStoredValues: Map<string, string> = new Map();
   /**
    * For transform expressions: last raw `value` with `Number(value) > 0` seen for this mapping
    * (updated after each successful transform). Not available when expression is omitted unless still updated for next time.
@@ -33,28 +39,61 @@ export class DataMapperService extends EventEmitter {
     return Math.max(1, Math.floor(n));
   }
 
-  private shouldStoreHistorical(mapping: ParameterMapping, timestamp: number, sourceId?: string): boolean {
+  private shouldStoreHistorical(
+    mapping: ParameterMapping,
+    timestamp: number,
+    sourceId?: string,
+    value?: unknown
+  ): boolean {
     let intervalMs: number | undefined;
+    const resolvedSource = sourceId || mapping.sourceDeviceId || '';
 
-    if (mapping.sourceType === 'system' && (sourceId || mapping.sourceDeviceId || 'system-timestamp') === 'system-timestamp') {
+    if (mapping.sourceType === 'system' && (resolvedSource || 'system-timestamp') === 'system-timestamp') {
       intervalMs = this.systemTimestampIntervalMs;
-    } else if (mapping.sourceType === 'system' && String(sourceId || mapping.sourceDeviceId || '').startsWith('system-gnss-')) {
+    } else if (mapping.sourceType === 'system' && String(resolvedSource).startsWith('system-gnss-')) {
       intervalMs = this.systemGnssHistoryIntervalMs;
+    } else if (mapping.sourceType === 'system') {
+      // SPARING/MQTT/HTTP telemetry: never write on every Modbus/MQTT poll (was unbounded).
+      intervalMs = getSystemTelemetryHistoryIntervalMs(resolvedSource) ?? undefined;
     } else if (mapping.sourceType === 'modbus') {
       const device = this.db.getModbusDeviceById(mapping.sourceDeviceId);
       intervalMs = device?.recordInterval ?? undefined;
     }
 
     if (!intervalMs || intervalMs <= 0) {
-      return true;
+      return this.markHistoricalStore(mapping.id, timestamp, value, resolvedSource);
     }
 
     const last = this.lastStoredTimestamps.get(mapping.id) || 0;
-    if (timestamp - last >= intervalMs) {
-      this.lastStoredTimestamps.set(mapping.id, timestamp);
-      return true;
+    if (timestamp - last < intervalMs) {
+      return false;
     }
-    return false;
+    return this.markHistoricalStore(mapping.id, timestamp, value, resolvedSource);
+  }
+
+  /** Deduplicate bulky/system telemetry so identical KLHK strings are not re-inserted every minute. */
+  private markHistoricalStore(
+    mappingId: string,
+    timestamp: number,
+    value: unknown,
+    sourceId: string
+  ): boolean {
+    if (isBulkySystemHistorySource(sourceId) || sourceId.startsWith('system-sparing-') || sourceId.startsWith('system-mqtt-') || sourceId.startsWith('system-http-')) {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(value);
+      } catch {
+        serialized = String(value);
+      }
+      if (this.lastStoredValues.get(mappingId) === serialized) {
+        // Refresh throttle timestamp so we do not retry-write the same payload immediately.
+        this.lastStoredTimestamps.set(mappingId, timestamp);
+        return false;
+      }
+      this.lastStoredValues.set(mappingId, serialized);
+    }
+    this.lastStoredTimestamps.set(mappingId, timestamp);
+    return true;
   }
 
   loadMappings(): void {
@@ -68,6 +107,7 @@ export class DataMapperService extends EventEmitter {
   reloadMappings(): void {
     this.loadMappings();
     this.lastStoredTimestamps.clear();
+    this.lastStoredValues.clear();
     const ids = new Set(this.mappings.keys());
     for (const id of this.lastPositiveSourceByMappingId.keys()) {
       if (!ids.has(id)) this.lastPositiveSourceByMappingId.delete(id);
@@ -108,7 +148,12 @@ export class DataMapperService extends EventEmitter {
         let stored = false;
         if (mapping.storeHistory) {
           try {
-            const shouldStore = this.shouldStoreHistorical(mapping, mappedData.timestamp, mapping.sourceDeviceId);
+            const shouldStore = this.shouldStoreHistorical(
+              mapping,
+              mappedData.timestamp,
+              mapping.sourceDeviceId,
+              mappedData.value
+            );
             if (shouldStore) {
               this.db.insertHistoricalData({
                 mappingId: mapping.id,
@@ -131,7 +176,8 @@ export class DataMapperService extends EventEmitter {
       }
     }
 
-    await this.emitSystemData();
+    // System mappings are emitted on their own 1s timer — do not re-run on every Modbus poll
+    // (that previously wrote SPARING response history at device poll rate and filled scada.db).
   }
 
   async mapMqttData(data: any): Promise<void> {
@@ -153,7 +199,12 @@ export class DataMapperService extends EventEmitter {
         let stored = false;
         if (mapping.storeHistory) {
           try {
-            const shouldStore = this.shouldStoreHistorical(mapping, mappedData.timestamp, mapping.sourceDeviceId);
+            const shouldStore = this.shouldStoreHistorical(
+              mapping,
+              mappedData.timestamp,
+              mapping.sourceDeviceId,
+              mappedData.value
+            );
             if (shouldStore) {
               this.db.insertHistoricalData({
                 mappingId: mapping.id,
@@ -175,8 +226,6 @@ export class DataMapperService extends EventEmitter {
         }
       }
     }
-
-    await this.emitSystemData();
   }
 
   private async transformData(
@@ -527,7 +576,12 @@ export class DataMapperService extends EventEmitter {
       if (mappedData) {
         let stored = false;
         if (mapping.storeHistory) {
-          const shouldStore = this.shouldStoreHistorical(mapping, mappedData.timestamp, sourceId);
+          const shouldStore = this.shouldStoreHistorical(
+            mapping,
+            mappedData.timestamp,
+            sourceId,
+            mappedData.value
+          );
           if (shouldStore) {
             try {
               this.db.insertHistoricalData({

@@ -189,13 +189,13 @@ const ParameterMappings: React.FC = () => {
         id: 'system-sparing-response-desc',
         label: 'SPARING — last API response description',
         description:
-          'KLHK `desc` field only (empty on success when null). For the full Response text from Send Logs, use “last API response (full)” below. Data type: string.',
+          'KLHK `desc` field only (empty on success when null). For the full Response text from Send Logs, use “last API response (full)” below. Data type: string. Store History defaults OFF (text is large).',
       },
       {
         id: 'system-sparing-response-raw',
         label: 'SPARING — last API response (full)',
         description:
-          'Full response body as shown in SPARING Send Logs (e.g. {"status":true,"desc":null} or network error text). Data type: string.',
+          'Full response body as shown in SPARING Send Logs (e.g. {"status":true,"desc":null} or network error text). Data type: string. Store History defaults OFF to avoid filling the database.',
       },
       {
         id: 'system-sparing-last-send-duration-ms',
@@ -573,8 +573,11 @@ const ParameterMappings: React.FC = () => {
                 onChange={(e) => {
                   const id = e.target.value;
                   let dataType: string | undefined;
+                  let storeHistory = formData.storeHistory;
                   if (id === 'system-sparing-response-desc' || id === 'system-sparing-response-raw') {
                     dataType = 'string';
+                    // Large KLHK strings must not flood historical_data (seen growing to 10GB+).
+                    storeHistory = false;
                   } else if (id === 'system-sparing-last-response-at') {
                     dataType = 'timestamp';
                   } else if (
@@ -587,11 +590,12 @@ const ParameterMappings: React.FC = () => {
                   setFormData((prev) => ({
                     ...prev,
                     sourceDeviceId: id,
+                    storeHistory,
                     ...(dataType ? { dataType } : {}),
                   }));
                 }}
                 fullWidth
-                helperText="Built-in values from this application (not from Modbus or MQTT). Counters reset on app restart; SPARING response fields update after each KLHK API send."
+                helperText="Built-in values from this application (not from Modbus or MQTT). Counters reset on app restart; SPARING response fields update after each KLHK API send. Full/desc response sources default Store History OFF to protect disk."
               >
                 {systemSources.map((source) => (
                   <MenuItem key={source.id} value={source.id} sx={{ alignItems: 'flex-start', py: 1 }}>
@@ -945,7 +949,13 @@ const ParameterMappings: React.FC = () => {
                   }
                 />
               }
-              label="Store History"
+              label={
+                formData.sourceType === 'system' &&
+                (formData.sourceDeviceId === 'system-sparing-response-desc' ||
+                  formData.sourceDeviceId === 'system-sparing-response-raw')
+                  ? 'Store History (not recommended — large text; leave OFF)'
+                  : 'Store History'
+              }
             />
           </Box>
         </DialogContent>

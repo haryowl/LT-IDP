@@ -773,22 +773,48 @@ export class MqttPublisherService extends EventEmitter {
         `   📊 [MQTT PUBLISHER] "${publisher.name}" scheduled batch: ${batch.length} row(s), mode=${publisher.mode}`
       );
 
-      const latestDataItem = batch[batch.length - 1];
-      const payload = this.formatPayload(publisher, latestDataItem, batch, publisherId);
+      // Scheduled ticks always publish the full mapping set for this interval.
+      // Simple format previously sent only the last row, which looked like an empty/incomplete payload.
+      let payload: string;
+      if (publisher.jsonFormat === 'custom' && publisher.customJsonTemplate) {
+        payload = this.formatPayload(publisher, batch[batch.length - 1], batch, publisherId);
+      } else if (batch.length === 1) {
+        payload = this.formatPayload(publisher, batch[0], batch, publisherId);
+      } else {
+        const clientId = this.db.getClientId();
+        payload = JSON.stringify({
+          ...(clientId ? { clientId } : {}),
+          batch: batch.map((item) => ({
+            name: item.mappingName,
+            parameterId: item.parameterId,
+            value: item.value,
+            unit: item.unit,
+            timestamp: item.timestamp,
+            quality: item.quality,
+          })),
+          count: batch.length,
+          timestamp: batch[batch.length - 1]?.timestamp ?? Date.now(),
+        });
+      }
 
       if (!payload || payload === 'undefined' || payload === 'null') {
         throw new Error('Scheduled publish produced empty payload');
       }
 
+      // Include publisher name on every line so `grep serverMe` still shows the body.
       log.info(`   📄 [MQTT PUBLISHER] "${publisher.name}" Scheduled JSON Payload:`);
       try {
         const parsed = JSON.parse(payload);
         const pretty = JSON.stringify(parsed, null, 2);
-        const preview = pretty.length > 500 ? pretty.substring(0, 500) + '\n... (truncated)' : pretty;
-        log.info(`      ${preview.split('\n').join('\n      ')}`);
+        const preview = pretty.length > 2000 ? pretty.substring(0, 2000) + '\n... (truncated)' : pretty;
+        for (const line of preview.split('\n')) {
+          log.info(`   📄 [MQTT PUBLISHER] "${publisher.name}" | ${line}`);
+        }
       } catch {
-        const payloadPreview = payload.length > 500 ? payload.substring(0, 500) + '... (truncated)' : payload;
-        log.info(`      ${payloadPreview.split('\n').join('\n      ')}`);
+        const payloadPreview = payload.length > 2000 ? payload.substring(0, 2000) + '... (truncated)' : payload;
+        for (const line of payloadPreview.split('\n')) {
+          log.info(`   📄 [MQTT PUBLISHER] "${publisher.name}" | ${line}`);
+        }
       }
 
       await this.sendMessage(connection, payload);

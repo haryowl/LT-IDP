@@ -20,6 +20,11 @@ import type {
   RealtimeData,
 } from '../types';
 import { getLogger } from './logger';
+import {
+  BULKY_SYSTEM_HISTORY_SOURCE_IDS,
+  defaultStoreHistoryForMapping,
+} from './systemHistoryPolicy';
+import { SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
 
 /** Disk space for the volume holding the database (Node fs.statfsSync when available). */
 export type DataStorageDiskInfo = {
@@ -1235,6 +1240,14 @@ export class DatabaseService {
         ? mapping.sourceDeviceId || 'system-timestamp'
         : mapping.sourceDeviceId;
 
+    const storeHistoryFlag = defaultStoreHistoryForMapping(
+      mapping.sourceType,
+      sourceDeviceId,
+      mapping.storeHistory
+    )
+      ? 1
+      : 0;
+
     // Validate parameterId uniqueness if provided
     if (parameterId) {
       const existing = this.db.prepare('SELECT id FROM parameter_mappings WHERE parameter_id = ?').get(parameterId);
@@ -1269,11 +1282,18 @@ export class DatabaseService {
         outputFormat,
         outputTimezone,
         mapping.transformExpression,
-        mapping.storeHistory ? 1 : 0,
+        storeHistoryFlag,
         now,
         now
       );
-    return { ...mapping, id, createdAt: now, updatedAt: now } as ParameterMapping;
+    return {
+      ...mapping,
+      id,
+      sourceDeviceId: sourceDeviceId as string,
+      storeHistory: storeHistoryFlag === 1,
+      createdAt: now,
+      updatedAt: now,
+    } as ParameterMapping;
   }
 
   updateParameterMapping(id: string, mapping: Partial<ParameterMapping>): void {
@@ -1406,6 +1426,45 @@ export class DatabaseService {
         `UPDATE parameter_mappings SET source_device_id = 'system-timestamp' WHERE source_type = 'system' AND (source_device_id IS NULL OR TRIM(source_device_id) = '')`
       )
       .run();
+
+    this.migrateDisableBulkySystemHistory();
+  }
+
+  /**
+   * One-time: turn off store_history for SPARING response desc/raw on existing loggers.
+   * Live values still emit in realtime; history of large identical API strings previously
+   * grew scada.db to tens of GB when written on every Modbus poll.
+   */
+  private migrateDisableBulkySystemHistory(): void {
+    try {
+      if (this.getSystemConfig('migration:bulkySystemHistoryOff') === '1') {
+        return;
+      }
+      const now = Date.now();
+      const result = this.db
+        .prepare(
+          `UPDATE parameter_mappings
+           SET store_history = 0, updated_at = ?
+           WHERE source_type = 'system'
+             AND source_device_id IN (?, ?)
+             AND store_history = 1`
+        )
+        .run(
+          now,
+          SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_DESC,
+          SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_RAW
+        );
+      this.setSystemConfig('migration:bulkySystemHistoryOff', '1');
+      if (result.changes > 0) {
+        getLogger().info(
+          `[migration] Disabled store_history on ${result.changes} bulky SPARING response mapping(s) (${BULKY_SYSTEM_HISTORY_SOURCE_IDS.join(', ')})`
+        );
+      }
+    } catch (e: any) {
+      getLogger().warn(
+        `[migration] bulkySystemHistoryOff skipped: ${e?.message || e}`
+      );
+    }
   }
 
   deleteParameterMapping(id: string): void {
