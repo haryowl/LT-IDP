@@ -1,10 +1,10 @@
 import mqtt, { MqttClient } from 'mqtt';
-import type { Publisher, RealtimeData } from '../types';
+import type { Publisher, RealtimeData, ParameterMapping } from '../types';
 import type { DatabaseService } from './database';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import { getLogger } from './logger';
-import { getTransmissionTelemetry } from './transmissionTelemetry';
+import { getTransmissionTelemetry, SYSTEM_TELEMETRY_SOURCE_IDS } from './transmissionTelemetry';
 import {
   clearPublisherFlushTimer,
   clearScheduledPublisherTimer,
@@ -30,8 +30,15 @@ interface PublisherConnection {
   isReconnecting: boolean;
 }
 
+type PreservedDeliveryTimers = {
+  scheduledTimer?: NodeJS.Timeout;
+  flushTimer?: NodeJS.Timeout;
+};
+
 export class MqttPublisherService extends EventEmitter {
   private connections: Map<string, PublisherConnection> = new Map();
+  /** Timers kept across MQTT reconnect so hourly schedule is not reset on every flap. */
+  private preservedDeliveryTimers: Map<string, PreservedDeliveryTimers> = new Map();
 
   private resolvePublisher(publisherId: string): Publisher | undefined {
     const connection = this.connections.get(publisherId);
@@ -145,7 +152,7 @@ export class MqttPublisherService extends EventEmitter {
     try {
       const options: mqtt.IClientOptions = {
         clientId: `publisher_${publisherId}_${Date.now()}`,
-        keepalive: 30, // Reduced from 60 to 30 seconds for better reliability
+        keepalive: 60,
         reconnectPeriod: 0, // Disable automatic reconnection, we'll handle it manually
         clean: true,
         connectTimeout: 30000, // 30 second connection timeout
@@ -176,6 +183,13 @@ export class MqttPublisherService extends EventEmitter {
         isReconnecting: false,
       };
 
+      const preserved = this.preservedDeliveryTimers.get(publisherId);
+      if (preserved) {
+        connection.scheduledTimer = preserved.scheduledTimer;
+        connection.flushTimer = preserved.flushTimer;
+        this.preservedDeliveryTimers.delete(publisherId);
+      }
+
       this.connections.set(publisherId, connection);
 
       // Setup event handlers
@@ -203,10 +217,15 @@ export class MqttPublisherService extends EventEmitter {
           log.info(`   ⏸️  [MQTT PUBLISHER] Skipping buffer processing on connect because scheduled publishing is enabled`);
         }
 
-        const cadence = syncPublisherDeliveryTimers(connection, connection.publisher, {
-          onFlush: () => void this.flushBuffer(publisherId),
-          onScheduledTick: () => void this.performScheduledPublish(publisherId),
-        });
+        const cadence = syncPublisherDeliveryTimers(
+          connection,
+          connection.publisher,
+          {
+            onFlush: () => void this.flushBuffer(publisherId),
+            onScheduledTick: () => void this.performScheduledPublish(publisherId),
+          },
+          { preserveExisting: true }
+        );
         log.info(
           `   ⏱️  [MQTT PUBLISHER] "${connection.publisher.name}" delivery cadence: ${cadence}${
             cadence === 'scheduled'
@@ -320,17 +339,27 @@ export class MqttPublisherService extends EventEmitter {
     }
   }
 
-  async stop(publisherId: string): Promise<void> {
+  async stop(publisherId: string, options?: { preserveDeliveryTimers?: boolean }): Promise<void> {
     const connection = this.connections.get(publisherId);
 
     if (!connection) {
       return;
     }
 
-    clearPublisherFlushTimer(connection.flushTimer);
-    connection.flushTimer = undefined;
-    clearScheduledPublisherTimer(connection.scheduledTimer);
-    connection.scheduledTimer = undefined;
+    if (options?.preserveDeliveryTimers) {
+      this.preservedDeliveryTimers.set(publisherId, {
+        scheduledTimer: connection.scheduledTimer,
+        flushTimer: connection.flushTimer,
+      });
+      connection.scheduledTimer = undefined;
+      connection.flushTimer = undefined;
+    } else {
+      this.preservedDeliveryTimers.delete(publisherId);
+      clearPublisherFlushTimer(connection.flushTimer);
+      connection.flushTimer = undefined;
+      clearScheduledPublisherTimer(connection.scheduledTimer);
+      connection.scheduledTimer = undefined;
+    }
 
     // Stop reconnect timer
     if (connection.reconnectTimer) {
@@ -753,13 +782,14 @@ export class MqttPublisherService extends EventEmitter {
       if (!window) return;
       const { from, to, bucketTs } = window;
 
-      const batch = collectScheduledPublishBatch(
+      let batch = collectScheduledPublishBatch(
         this.db,
         publisher,
         publisherId,
         window,
         effectiveMappingIds
       );
+      batch = this.enrichScheduledBatchWithLiveSystem(batch, mappingsList, effectiveMappingIds, bucketTs);
 
       if (batch.length === 0) {
         log.info(
@@ -881,6 +911,70 @@ export class MqttPublisherService extends EventEmitter {
   }
 
   /**
+   * When Store History is off (or pruned) for system mappings like datetime/klhk,
+   * scheduled ticks would otherwise publish incomplete payloads. Fill gaps from live sources.
+   */
+  private enrichScheduledBatchWithLiveSystem(
+    batch: RealtimeData[],
+    mappingsList: ParameterMapping[],
+    effectiveMappingIds: string[],
+    bucketTs: number
+  ): RealtimeData[] {
+    const byId = new Map(batch.map((b) => [b.mappingId, b]));
+    const tel = getTransmissionTelemetry();
+    const mappingById = new Map(mappingsList.map((m) => [m.id, m]));
+
+    for (const mid of effectiveMappingIds) {
+      if (byId.has(mid)) continue;
+      const m = mappingById.get(mid);
+      if (!m || m.sourceType !== 'system') continue;
+      const sourceId = m.sourceDeviceId || 'system-timestamp';
+      let value: unknown;
+      if (sourceId === 'system-timestamp') {
+        value = this.formatSystemTimestampValue(m, Date.now());
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_RAW) {
+        if (!tel.hasSparingResponse()) continue;
+        value = tel.getSparingResponseRaw() ?? '';
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_DESC) {
+        if (!tel.hasSparingResponse()) continue;
+        value = tel.getSparingResponseDesc() ?? '';
+      } else if (sourceId === SYSTEM_TELEMETRY_SOURCE_IDS.SPARING_RESPONSE_STATUS) {
+        const st = tel.getSparingResponseStatus();
+        if (st == null) continue;
+        value = st ? 1 : 0;
+      } else {
+        continue;
+      }
+      byId.set(mid, {
+        mappingId: mid,
+        mappingName: m.mappedName,
+        parameterId: m.parameterId,
+        value,
+        unit: m.unit,
+        timestamp: bucketTs,
+        quality: 'good',
+      });
+    }
+
+    return Array.from(byId.values()).sort((a, b) => a.mappingName.localeCompare(b.mappingName));
+  }
+
+  private formatSystemTimestampValue(mapping: ParameterMapping, epochMs: number): string {
+    const tz = mapping.outputTimezone || 'UTC+0';
+    const m = tz.match(/UTC([+-])(\d{1,2})(?::?(\d{2}))?/i);
+    let offsetMin = 0;
+    if (m) {
+      offsetMin = (m[1] === '-' ? -1 : 1) * (parseInt(m[2], 10) * 60 + parseInt(m[3] || '0', 10));
+    }
+    const d = new Date(epochMs + offsetMin * 60_000);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const sign = offsetMin >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMin);
+    const off = `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}${off}`;
+  }
+
+  /**
    * Format payload according to publisher's JSON format configuration
    * @param batch Optional batch array - if provided, template can access all mappings
    * @param publisherId Optional publisher ID - if provided, template can access cached mappings
@@ -987,8 +1081,8 @@ export class MqttPublisherService extends EventEmitter {
         // Wait a bit before reconnecting
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Stop cleanly so scheduled/flush timers are not left running on reconnect
-        await this.stop(publisherId);
+        // Stop cleanly but keep scheduled/flush timers so hourly cadence survives flaps
+        await this.stop(publisherId, { preserveDeliveryTimers: true });
 
         // Restart the publisher
         await this.start(publisherId);

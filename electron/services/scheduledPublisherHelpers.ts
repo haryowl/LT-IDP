@@ -30,18 +30,28 @@ export interface PublisherTimerHandles {
 /**
  * Exactly one delivery cadence: scheduled interval OR buffer flush interval, never both.
  * Call after connect, start, or refresh when publisher settings change.
+ * Pass `preserveExisting: true` on MQTT reconnect so hourly timers are not reset
+ * (resetting on every flap skips the hour boundary and stops publishes).
  */
 export function syncPublisherDeliveryTimers(
   handles: PublisherTimerHandles,
   publisher: Publisher,
-  callbacks: { onFlush: () => void; onScheduledTick: () => void }
+  callbacks: { onFlush: () => void; onScheduledTick: () => void },
+  options?: { preserveExisting?: boolean }
 ): 'scheduled' | 'buffer_flush' | 'none' {
+  const wantScheduled = isScheduledPublishingEnabled(publisher);
+  if (options?.preserveExisting && wantScheduled && handles.scheduledTimer) {
+    clearPublisherFlushTimer(handles.flushTimer);
+    handles.flushTimer = undefined;
+    return 'scheduled';
+  }
+
   clearPublisherFlushTimer(handles.flushTimer);
   handles.flushTimer = undefined;
   clearScheduledPublisherTimer(handles.scheduledTimer);
   handles.scheduledTimer = undefined;
 
-  if (isScheduledPublishingEnabled(publisher)) {
+  if (wantScheduled) {
     const intervalMs = getScheduledIntervalMs(publisher.scheduledInterval, publisher.scheduledIntervalUnit);
     if (!intervalMs) {
       return 'none';
