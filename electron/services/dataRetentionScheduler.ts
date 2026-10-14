@@ -61,6 +61,36 @@ export function runScheduledDataRetention(db: DatabaseService): void {
       }
     }
 
+    // SPARING SQLite send logs (response text); default 30 days
+    const sparingLogDays = parseInt(db.getSystemConfig('data:sparingLogRetentionDays') || '30', 10);
+    if (sparingLogDays > 0) {
+      const sc = Date.now() - sparingLogDays * DAY_MS;
+      const sr = db.pruneSparingLogsBeforeTimestamp(sc);
+      if (sr.deleted > 0) {
+        log.info(`[data retention] Pruned ${sr.deleted} SPARING log row(s) older than ${sparingLogDays} day(s)`);
+      }
+    }
+
+    // Completed SPARING queue rows; default 7 days
+    const sparingQueueDays = parseInt(db.getSystemConfig('data:sparingQueueRetentionDays') || '7', 10);
+    if (sparingQueueDays > 0) {
+      const qc = Date.now() - sparingQueueDays * DAY_MS;
+      const qr = db.pruneSparingQueueSentBeforeTimestamp(qc);
+      if (qr.deleted > 0) {
+        log.info(`[data retention] Pruned ${qr.deleted} sent SPARING queue row(s) older than ${sparingQueueDays} day(s)`);
+      }
+    }
+
+    // Publisher buffer leftovers (sent/failed); default 7 days
+    const bufferDays = parseInt(db.getSystemConfig('data:bufferRetentionDays') || '7', 10);
+    if (bufferDays > 0) {
+      const bc = Date.now() - bufferDays * DAY_MS;
+      const br = db.pruneBufferQueueBeforeTimestamp(bc);
+      if (br.deleted > 0) {
+        log.info(`[data retention] Pruned ${br.deleted} buffer_queue row(s) older than ${bufferDays} day(s)`);
+      }
+    }
+
     const summary = db.getDataStorageSummary();
     const auto = (db.getSystemConfig('data:lowDiskAutoPurge') || '1') === '1';
     const threshold = parseFloat(db.getSystemConfig('data:lowDiskFreePctThreshold') || '5');

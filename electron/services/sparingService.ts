@@ -6,6 +6,7 @@ import { URL } from 'url';
 import type { DatabaseService } from './database';
 import { getLogger } from './logger';
 import { getTransmissionTelemetry } from './transmissionTelemetry';
+import { isSparingAlreadyAcceptedResponse } from './sparingResponsePolicy';
 import type {
   SparingConfig,
   SparingMapping,
@@ -587,10 +588,13 @@ export class SparingService {
     try {
       const payload = { token: jwtToken };
       getLogger().info(`📤 Sending data to ${endpoint}...`);
-      getLogger().info(`   🔐 JWT Token (sending): ${jwtToken}`);
+      // Never log full JWT to app logs (fills disk on retries); full token stays in sparing-*.jsonl only
+      const jwtPreview =
+        jwtToken.length > 48 ? `${jwtToken.slice(0, 24)}…${jwtToken.slice(-12)} (${jwtToken.length} chars)` : jwtToken;
+      getLogger().info(`   🔐 JWT Token (sending): ${jwtPreview}`);
       const fileLogger = getLogger();
       try {
-        fileLogger.writeToFile(`[SPARING] Endpoint: ${endpoint}\n[SPARING] JWT: ${jwtToken}\n`);
+        fileLogger.writeToFile(`[SPARING] Endpoint: ${endpoint}\n[SPARING] JWT: ${jwtPreview}\n`);
       } catch {}
 
       // Capture body even on HTTP 400 so KLHK JSON {"status":false,"desc":...} is handled as API response
@@ -610,9 +614,23 @@ export class SparingService {
         fileLogger.writeToFile(`[SPARING] RAW Response: ${rawPreview}${(typeof raw === 'string' && raw.length > 2000) ? '... (truncated)' : ''}\n`);
       } catch {}
 
+      const desc =
+        responseData?.desc != null ? String(responseData.desc) : typeof raw === 'string' ? raw : null;
+      let status = Boolean(responseData?.status);
+
+      // KLHK often returns status:false + "duplikasi / sudah terkirim" when the payload
+      // was already stored. Treat as success so queue/scheduler do not resend forever.
+      if (!status && isSparingAlreadyAcceptedResponse(desc)) {
+        getLogger().info(
+          `ℹ️  SPARING reports data already stored (treating as success, will not retry): ${desc}`
+        );
+        status = true;
+      }
+
       return {
-        status: Boolean(responseData?.status),
-        desc: responseData?.desc != null ? String(responseData.desc) : (typeof raw === 'string' ? raw : null),
+        status,
+        desc,
+        alreadyAccepted: !Boolean(responseData?.status) && isSparingAlreadyAcceptedResponse(desc),
       };
     } catch (error: any) {
       getLogger().error(`❌ Send failed:`, error.message);
@@ -662,6 +680,19 @@ export class SparingService {
     } else if (sendType === '2min') {
       this.upsertSparingConfig({ last2MinSend: hourTimestamp } as any);
     }
+  }
+
+  /** Close open queue rows for a slot without calling the API again. */
+  private markOpenQueueItemsSent(sendType: string, hourTimestamp: number): void {
+    const now = Date.now();
+    this.db
+      .getDb()
+      .prepare(
+        `UPDATE sparing_queue
+         SET status = 'sent', sent_at = ?, error_message = NULL
+         WHERE send_type = ? AND hour_timestamp = ? AND status IN ('pending', 'sending', 'failed')`
+      )
+      .run(now, sendType, hourTimestamp);
   }
 
   async sendHourlyBatch(hourTimestamp: number): Promise<void> {
@@ -715,10 +746,12 @@ export class SparingService {
       }
 
       jwtToken = this.encryptJWT(hourlyData, config.apiSecret);
-      getLogger().info(`🔐 Generated JWT (hourly): ${jwtToken}`);
+      const jwtPreview =
+        jwtToken.length > 48 ? `${jwtToken.slice(0, 24)}…${jwtToken.slice(-12)} (${jwtToken.length} chars)` : jwtToken;
+      getLogger().info(`🔐 Generated JWT (hourly): ${jwtPreview}`);
       try {
         const fileLogger = getLogger();
-        fileLogger.writeToFile(`[SPARING] Generated JWT (hourly): ${jwtToken}\n`);
+        fileLogger.writeToFile(`[SPARING] Generated JWT (hourly): ${jwtPreview}\n`);
       } catch {}
 
       const startTime = Date.now();
@@ -740,9 +773,13 @@ export class SparingService {
       });
 
       if (response.status) {
-        getLogger().info(`✅ Hourly batch sent successfully in ${duration}ms`);
+        const label = response.alreadyAccepted
+          ? `✅ Hourly batch already on KLHK (idempotent success) in ${duration}ms`
+          : `✅ Hourly batch sent successfully in ${duration}ms`;
+        getLogger().info(label);
 
         this.markSlotSent('hourly', hourTimestamp);
+        this.markOpenQueueItemsSent('hourly', hourTimestamp);
 
         this.logSend('hourly', hourTimestamp, hourlyData.data.length, 'success', JSON.stringify(response), duration);
       } else {
@@ -751,6 +788,14 @@ export class SparingService {
       }
     } catch (error: any) {
       getLogger().error(`❌ Hourly batch send failed:`, error.message);
+
+      // Duplicate response sometimes surfaces as thrown text from older paths / proxies
+      if (isSparingAlreadyAcceptedResponse(error.message)) {
+        this.markSlotSent('hourly', hourTimestamp);
+        this.markOpenQueueItemsSent('hourly', hourTimestamp);
+        getLogger().info('ℹ️  Hourly send: KLHK already has this hour — marked sent, not queued');
+        return;
+      }
 
       if (hourlyData && jwtToken) {
         this.writeSparingLogEntry({
@@ -885,6 +930,16 @@ export class SparingService {
     try {
       const config = this.getSparingConfig();
       if (!config || !config.apiSecret) return;
+
+      // Do not queue "already stored on KLHK" errors — that would cause endless resends
+      if (isSparingAlreadyAcceptedResponse(errorMessage)) {
+        this.markSlotSent(sendType, hourTimestamp);
+        this.markOpenQueueItemsSent(sendType, hourTimestamp);
+        getLogger().info(
+          `⏭️  Skip queue: ${sendType} ${new Date(hourTimestamp).toISOString()} already accepted by KLHK`
+        );
+        return;
+      }
 
       // Do not queue again if this hour/slot was already delivered
       if (this.hasAlreadySent(sendType, hourTimestamp)) {
@@ -1078,13 +1133,31 @@ export class SparingService {
              WHERE send_type = ? AND hour_timestamp = ? AND id != ? AND status IN ('pending', 'failed', 'sending')`
           )
           .run(item.send_type, item.hour_timestamp, item.id);
-        getLogger().info(`✅ Queue item ${item.id} sent successfully`);
+        getLogger().info(
+          response.alreadyAccepted
+            ? `✅ Queue item ${item.id} already on KLHK (idempotent success)`
+            : `✅ Queue item ${item.id} sent successfully`
+        );
         return { success: true };
       }
 
       throw new Error(response.desc || 'Unknown error');
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
+
+      // Safety net if duplicate text arrives outside the normal JSON status path
+      if (isSparingAlreadyAcceptedResponse(error.message)) {
+        this.db
+          .getDb()
+          .prepare('UPDATE sparing_queue SET status = ?, sent_at = ?, error_message = NULL WHERE id = ?')
+          .run('sent', Date.now(), item.id);
+        this.markSlotSent(item.send_type, item.hour_timestamp);
+        this.markOpenQueueItemsSent(item.send_type, item.hour_timestamp);
+        this.recordSparingApiResponse(error.message || String(error), durationMs, true);
+        getLogger().info(`✅ Queue item ${item.id} already on KLHK (idempotent success from error text)`);
+        return { success: true };
+      }
+
       this.recordSparingApiResponse(error.message || String(error), durationMs, false);
       const newRetryCount = item.retry_count + 1;
       const newStatus = force ? 'failed' : newRetryCount >= maxAttempts ? 'failed' : 'pending';
@@ -1610,10 +1683,12 @@ export class SparingService {
       }
 
       const jwtToken = this.encryptJWT(twoMinData, config.apiSecret);
-      getLogger().info(`🔐 Generated JWT (2-min): ${jwtToken}`);
+      const jwtPreview =
+        jwtToken.length > 48 ? `${jwtToken.slice(0, 24)}…${jwtToken.slice(-12)} (${jwtToken.length} chars)` : jwtToken;
+      getLogger().info(`🔐 Generated JWT (2-min): ${jwtPreview}`);
       try {
         const fileLogger = getLogger();
-        fileLogger.writeToFile(`[SPARING] Generated JWT (2-min): ${jwtToken}\n`);
+        fileLogger.writeToFile(`[SPARING] Generated JWT (2-min): ${jwtPreview}\n`);
       } catch {}
 
       let response: any;
@@ -1652,9 +1727,13 @@ export class SparingService {
       });
 
       if (response.status) {
-        getLogger().info(`✅ 2-minute data sent successfully in ${duration}ms`);
+        const label = response.alreadyAccepted
+          ? `✅ 2-minute data already on KLHK (idempotent success) in ${duration}ms`
+          : `✅ 2-minute data sent successfully in ${duration}ms`;
+        getLogger().info(label);
 
         this.markSlotSent('2min', slotTimestamp);
+        this.markOpenQueueItemsSent('2min', slotTimestamp);
 
         this.logSend('2min', slotTimestamp, twoMinData.data.length, 'success', JSON.stringify(response), duration);
       } else {
@@ -1663,6 +1742,13 @@ export class SparingService {
       }
     } catch (error: any) {
       getLogger().error(`❌ 2-minute send failed:`, error.message);
+
+      if (isSparingAlreadyAcceptedResponse(error.message)) {
+        this.markSlotSent('2min', slotTimestamp);
+        this.markOpenQueueItemsSent('2min', slotTimestamp);
+        getLogger().info('ℹ️  2-minute send: KLHK already has this slot — marked sent, not queued');
+        return;
+      }
 
       await this.addToQueue('2min', slotTimestamp, error.message);
 

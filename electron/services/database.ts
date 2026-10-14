@@ -1428,6 +1428,26 @@ export class DatabaseService {
       .run();
 
     this.migrateDisableBulkySystemHistory();
+    this.migrateDefaultHistoryRetention();
+  }
+
+  /**
+   * One-time: if history retention was never configured, default to 90 days so
+   * scada.db cannot grow forever on unattended loggers.
+   */
+  private migrateDefaultHistoryRetention(): void {
+    try {
+      if (this.getSystemConfig('migration:defaultHistoryRetention90') === '1') {
+        return;
+      }
+      if (this.getSystemConfig('data:retentionDays') === undefined) {
+        this.setSystemConfig('data:retentionDays', '90');
+        getLogger().info('[migration] Set default historical data retention to 90 days');
+      }
+      this.setSystemConfig('migration:defaultHistoryRetention90', '1');
+    } catch (e: any) {
+      getLogger().warn(`[migration] defaultHistoryRetention90 skipped: ${e?.message || e}`);
+    }
   }
 
   /**
@@ -2266,22 +2286,42 @@ export class DatabaseService {
    */
   markBufferItemsSentUpTo(publisherId: string, upToTimestamp: number): number {
     const stmt = this.db.prepare(`
-      UPDATE buffer_queue
-      SET status = 'sent', last_attempt = ?, attempts = attempts + 1
+      DELETE FROM buffer_queue
       WHERE publisher_id = ? AND status = 'pending' AND timestamp <= ?
     `);
-    const info = stmt.run(Date.now(), publisherId, upToTimestamp);
+    const info = stmt.run(publisherId, upToTimestamp);
     return info.changes as number;
   }
 
   markBufferItemsSentInRange(publisherId: string, fromTimestamp: number, toTimestampExclusive: number): number {
     const stmt = this.db.prepare(`
-      UPDATE buffer_queue
-      SET status = 'sent', last_attempt = ?, attempts = attempts + 1
+      DELETE FROM buffer_queue
       WHERE publisher_id = ? AND status = 'pending' AND timestamp >= ? AND timestamp < ?
     `);
-    const info = stmt.run(Date.now(), publisherId, fromTimestamp, toTimestampExclusive);
+    const info = stmt.run(publisherId, fromTimestamp, toTimestampExclusive);
     return info.changes as number;
+  }
+
+  /** Remove old buffer rows (sent/failed leftovers) so buffer_queue cannot grow unboundedly. */
+  pruneBufferQueueBeforeTimestamp(cutoffMs: number): { deleted: number } {
+    const info = this.db
+      .prepare(`DELETE FROM buffer_queue WHERE timestamp < ? AND status IN ('sent', 'failed')`)
+      .run(cutoffMs);
+    return { deleted: info.changes as number };
+  }
+
+  /** Remove old SPARING send logs from SQLite (file logs are cleaned separately). */
+  pruneSparingLogsBeforeTimestamp(cutoffMs: number): { deleted: number } {
+    const info = this.db.prepare(`DELETE FROM sparing_logs WHERE timestamp < ?`).run(cutoffMs);
+    return { deleted: info.changes as number };
+  }
+
+  /** Remove old completed SPARING queue rows. */
+  pruneSparingQueueSentBeforeTimestamp(cutoffMs: number): { deleted: number } {
+    const info = this.db
+      .prepare(`DELETE FROM sparing_queue WHERE status = 'sent' AND COALESCE(sent_at, created_at) < ?`)
+      .run(cutoffMs);
+    return { deleted: info.changes as number };
   }
 
   getScheduledPublishCursor(publisherId: string): number | undefined {

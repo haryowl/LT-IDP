@@ -483,7 +483,8 @@ export class HttpClientService extends EventEmitter {
       try {
         const payload = this.formatPayload(publisher, item.data);
         await this.sendRequest(connection, payload);
-        this.db.updateBufferItemStatus(item.id, 'sent', item.attempts + 1);
+        // Delete immediately — original pending snapshot never had status 'sent'
+        this.db.deleteBufferItem(item.id);
       } catch (error: any) {
         console.error(`Error sending buffered item ${item.id}:`, error);
         const newAttempts = item.attempts + 1;
@@ -497,10 +498,6 @@ export class HttpClientService extends EventEmitter {
         }
       }
     }
-
-    pendingItems
-      .filter((item) => item.status === 'sent')
-      .forEach((item) => this.db.deleteBufferItem(item.id));
   }
 
   private formatPayload(publisher: Publisher, data: RealtimeData): any {

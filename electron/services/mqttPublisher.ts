@@ -714,9 +714,8 @@ export class MqttPublisherService extends EventEmitter {
       try {
         const payload = this.formatPayload(publisher, item.data);
         await this.sendMessage(connection, payload);
-
-        // Mark as sent
-        this.db.updateBufferItemStatus(item.id, 'sent', item.attempts + 1);
+        // Delete immediately — filtering the original pending snapshot never matched 'sent'
+        this.db.deleteBufferItem(item.id);
       } catch (error) {
         log.error(`Error sending buffered item ${item.id}:`, error);
 
@@ -729,11 +728,6 @@ export class MqttPublisherService extends EventEmitter {
         }
       }
     }
-
-      // Clean up sent items
-      pendingItems
-        .filter((item: any) => item.status === 'sent')
-        .forEach((item: any) => this.db.deleteBufferItem(item.id));
   }
 
   private syncDeliveryTimers(publisherId: string): void {

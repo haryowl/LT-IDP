@@ -57,7 +57,11 @@ export class DataMapperService extends EventEmitter {
       intervalMs = getSystemTelemetryHistoryIntervalMs(resolvedSource) ?? undefined;
     } else if (mapping.sourceType === 'modbus') {
       const device = this.db.getModbusDeviceById(mapping.sourceDeviceId);
-      intervalMs = device?.recordInterval ?? undefined;
+      // Poll emits every pollInterval; history must follow recordInterval (default 5s).
+      intervalMs = device?.recordInterval && device.recordInterval > 0 ? device.recordInterval : 5000;
+    } else if (mapping.sourceType === 'mqtt') {
+      // High-frequency MQTT topics must not write history on every message.
+      intervalMs = 5000;
     }
 
     if (!intervalMs || intervalMs <= 0) {
