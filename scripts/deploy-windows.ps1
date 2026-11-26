@@ -110,6 +110,9 @@ Write-Host "    cd `"$InstallDir`""
 Write-Host "    `$env:DATA_DIR = `"$DataDir`"; `$env:PORT = `"$Port`""
 Write-Host "    npm run start:web"
 Write-Host ""
+Write-Host "  To auto-start after reboot (Administrator PowerShell):"
+Write-Host "    .\scripts\install-windows-autostart.ps1 -InstallDir `"$InstallDir`" -DataDir `"$DataDir`" -Port $Port -Trigger Startup -StartNow"
+Write-Host ""
 
 if (-not $SkipStart) {
   npm run start:web

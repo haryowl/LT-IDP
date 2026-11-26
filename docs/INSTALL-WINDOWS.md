@@ -25,8 +25,11 @@ You can run LT-IDP as:
    - **Desktop:** `npm run build:app` → install the NSIS setup from `release\`.
    - **Web:** `npm run build:web` → `npm run start:web` → open http://localhost:3001.
 4. Log in as **admin** / **admin**, then change the password in **Settings**.
+5. **(Optional)** Auto-start web mode after reboot — see [section 6](#6-run-in-the-background-and-auto-start-on-reboot).
 
 For a scripted web deploy, see [scripts/deploy-windows.ps1](../scripts/deploy-windows.ps1) below.
+
+> **Default behavior:** LT-IDP does **not** run in the background or start after reboot until you install auto-start (Task Scheduler or NSSM).
 
 ---
 
@@ -214,36 +217,74 @@ The script clones/updates the repo (if needed), runs `npm install`, `npm run bui
 
 ---
 
-## 6. Run in the background (optional)
+## 6. Run in the background and auto-start on reboot
 
-### Task Scheduler (simple)
+By default, closing the PowerShell window or restarting the PC **stops** LT-IDP. Use one of the scripts below so the **web** server stays up and starts again after reboot.
 
-1. Open **Task Scheduler** → **Create Basic Task**.  
-2. Trigger: **When the computer starts** (or At log on).  
-3. Action: **Start a program**  
-   - Program: `C:\Program Files\nodejs\node.exe` (or output of `where.exe node`)  
-   - Arguments: `dist-server\server\index.js`  
-   - Start in: your LT-IDP install folder (must contain `dist\`, `dist-server\`, `node_modules\`)  
-4. In **Properties**, set environment if needed, or wrap with a small `.ps1` that sets `DATA_DIR` / `PORT` then starts Node.
+Prerequisites: you already ran `npm run build:web` (or `.\scripts\deploy-windows.ps1 -SkipStart`).
 
-Example wrapper `start-lt-idp.ps1`:
+### Option A — Task Scheduler (recommended, no extra software)
+
+**At PC startup** (runs even before login — needs **Administrator** PowerShell):
 
 ```powershell
-$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"
-$env:PORT = "3001"
-$env:NODE_ENV = "production"
-Set-Location "C:\Users\YOUR_USER\LT-IDP"
-node dist-server\server\index.js
+cd $HOME\LT-IDP
+# Build once if you have not yet:
+# npm run build:web
+
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow
 ```
 
-### NSSM (Windows service)
+**At user logon** (no admin required for the current user):
 
-1. Download [NSSM](https://nssm.cc/download).  
-2. Install a service pointing at `node.exe` with arguments `dist-server\server\index.js` and AppDirectory set to the project root.  
-3. Set AppEnvironmentExtra for `PORT` and `DATA_DIR`.  
-4. Start the service from **services.msc**.
+```powershell
+.\scripts\install-windows-autostart.ps1 -Trigger Logon -StartNow
+```
 
-### PM2 on Windows (optional)
+Custom paths/port:
+
+```powershell
+.\scripts\install-windows-autostart.ps1 `
+  -InstallDir "C:\Users\sparing\LT-IDP" `
+  -DataDir "C:\ProgramData\LT-IDP\data" `
+  -Port 3001 `
+  -Trigger Startup `
+  -StartNow
+```
+
+Useful commands:
+
+```powershell
+Get-ScheduledTask -TaskName "LT-IDP Web"
+Start-ScheduledTask -TaskName "LT-IDP Web"
+Stop-ScheduledTask -TaskName "LT-IDP Web"
+.\scripts\install-windows-autostart.ps1 -Uninstall
+```
+
+The task runs [`scripts/start-lt-idp-web.ps1`](../scripts/start-lt-idp-web.ps1), which sets `DATA_DIR` / `PORT` and starts `node dist-server\server\index.js`.
+
+### Option B — NSSM Windows service (optional)
+
+1. Download [NSSM](https://nssm.cc/download) and note the path to `win64\nssm.exe`.  
+2. Open **Administrator** PowerShell:
+
+```powershell
+cd $HOME\LT-IDP
+.\scripts\install-windows-service-nssm.ps1 `
+  -NssmPath "C:\Tools\nssm\win64\nssm.exe" `
+  -Port 3001
+```
+
+Remove the service:
+
+```powershell
+.\scripts\install-windows-service-nssm.ps1 -NssmPath "C:\Tools\nssm\win64\nssm.exe" -Uninstall
+```
+
+Service logs (default): `C:\ProgramData\LT-IDP\data\service-stdout.log` and `service-stderr.log`.
+
+### Option C — PM2 on Windows (optional)
 
 PM2 works on Windows but process management is less mature than on Linux. If you use it:
 
@@ -291,6 +332,9 @@ Adjust `-LocalPort` if you changed `PORT`. For desktop-only Electron use on the 
 | **Prod web** | `npm run build:web` then `npm run start:web` → http://localhost:3001 |
 | **Prod desktop installer** | `npm run build:app` → install from `release\` |
 | **Data dir (web)** | `$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"` |
+| **Auto-start (Task Scheduler)** | `.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow` |
+| **Auto-start (NSSM service)** | `.\scripts\install-windows-service-nssm.ps1 -NssmPath "...\nssm.exe"` |
+| **Remove auto-start task** | `.\scripts\install-windows-autostart.ps1 -Uninstall` |
 | **Full cross-platform guide** | [INSTALLATION.md](INSTALLATION.md) |
 | **Linux guide** | [INSTALL-LINUX.md](INSTALL-LINUX.md) |
 

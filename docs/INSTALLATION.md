@@ -205,7 +205,10 @@ Adjust the port if you changed `PORT`.
 
 ## Part B — Windows (step by step)
 
-> Prefer the dedicated guide: **[INSTALL-WINDOWS.md](INSTALL-WINDOWS.md)** (includes firewall, Task Scheduler / NSSM, and `deploy-windows.ps1`).
+> Prefer the dedicated guide: **[INSTALL-WINDOWS.md](INSTALL-WINDOWS.md)** (includes firewall, auto-start scripts, and `deploy-windows.ps1`).
+>
+> **Auto-start after reboot (web mode):** after `npm run build:web`, run as Administrator:
+> `.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow`
 
 ### B.1 — Install Git for Windows (to clone from GitHub)
 
