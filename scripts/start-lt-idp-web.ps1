@@ -48,7 +48,7 @@ function Resolve-NodeExe {
 
 $resolvedNode = Resolve-NodeExe -Preferred $NodeExe
 if (-not $resolvedNode) {
-  throw "node.exe not found. Install Node.js 18–22 LTS, or pass -NodeExe with the full path (e.g. C:\nvm4w\nodejs\node.exe)."
+  throw "node.exe not found. Install Node.js 18-22 LTS, or pass -NodeExe with the full path (e.g. C:\nvm4w\nodejs\node.exe)."
 }
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null

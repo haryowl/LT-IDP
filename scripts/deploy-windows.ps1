@@ -1,5 +1,5 @@
 # LT-IDP Windows deployment script (web application)
-# Prerequisites: Git for Windows, Node.js 18–22 (LTS). Run in PowerShell.
+# Prerequisites: Git for Windows, Node.js 18-22 (LTS). Run in PowerShell.
 # Usage:
 #   .\scripts\deploy-windows.ps1
 #   .\scripts\deploy-windows.ps1 -InstallDir "C:\LT-IDP" -DataDir "C:\ProgramData\LT-IDP\data" -Port 3001

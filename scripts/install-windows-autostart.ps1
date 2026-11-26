@@ -47,10 +47,10 @@ function Show-TaskDiagnostics {
   Write-Host "  State:          $($task.State)"
   Write-Host "  LastRunTime:    $($info.LastRunTime)"
   $resultHint = switch ([int]$info.LastTaskResult) {
-    0 { "completed OK (server may have exited — for a long-running server prefer State=Running)" }
+    0 { "completed OK (server may have exited - for a long-running server prefer State=Running)" }
     267009 { "TASK_RUNNING (normal while LT-IDP is up)" }
     267011 { "task has not run yet" }
-    default { "error — see autostart.log" }
+    default { "error - see autostart.log" }
   }
   Write-Host "  LastTaskResult: $($info.LastTaskResult) ($resultHint)"
   Write-Host "  NextRunTime:    $($info.NextRunTime)"
@@ -138,7 +138,7 @@ if ($Trigger -eq "Startup" -and -not $principalIsAdmin) {
   throw @"
 Trigger 'Startup' requires an elevated PowerShell (Run as Administrator).
 
-Right-click PowerShell → Run as administrator, then:
+Right-click PowerShell -> Run as administrator, then:
   cd `"$InstallDir`"
   Set-ExecutionPolicy -Scope Process Bypass
   .\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow
