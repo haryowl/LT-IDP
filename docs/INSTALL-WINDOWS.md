@@ -247,10 +247,19 @@ Prerequisites: you already ran `npm run build:web` (or `.\scripts\deploy-windows
 ```powershell
 cd $HOME\LT-IDP
 # Build once if you have not yet:
-# npm run build:web
+# npm.cmd run build:web
 
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow
+```
+
+If you use **nvm4w** and auto-start still fails, pass the absolute Node path:
+
+```powershell
+.\scripts\install-windows-autostart.ps1 `
+  -NodeExe "C:\nvm4w\nodejs\node.exe" `
+  -Trigger Startup `
+  -StartNow
 ```
 
 **At user logon** (no admin required for the current user):
@@ -266,20 +275,51 @@ Custom paths/port:
   -InstallDir "C:\Users\sparing\LT-IDP" `
   -DataDir "C:\ProgramData\LT-IDP\data" `
   -Port 3001 `
+  -NodeExe "C:\nvm4w\nodejs\node.exe" `
   -Trigger Startup `
   -StartNow
 ```
 
+The installer writes a `.cmd` launcher under `C:\ProgramData\LT-IDP\start-lt-idp-web.cmd` with the **absolute** `node.exe` path (so SYSTEM / Task Scheduler does not depend on your interactive PATH). Logs append to `C:\ProgramData\LT-IDP\data\autostart.log`.
+
 Useful commands:
 
 ```powershell
+.\scripts\install-windows-autostart.ps1 -Diagnose
 Get-ScheduledTask -TaskName "LT-IDP Web"
 Start-ScheduledTask -TaskName "LT-IDP Web"
 Stop-ScheduledTask -TaskName "LT-IDP Web"
 .\scripts\install-windows-autostart.ps1 -Uninstall
 ```
 
-The task runs [`scripts/start-lt-idp-web.ps1`](../scripts/start-lt-idp-web.ps1), which sets `DATA_DIR` / `PORT` and starts `node dist-server\server\index.js`.
+#### Auto-start not working? Diagnose
+
+`Ready` only means the task is registered — it does **not** mean the server is running.
+
+```powershell
+cd $HOME\LT-IDP
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows-autostart.ps1 -Diagnose
+Start-ScheduledTask -TaskName "LT-IDP Web"
+Start-Sleep 3
+.\scripts\install-windows-autostart.ps1 -Diagnose
+Get-Content C:\ProgramData\LT-IDP\data\autostart.log -Tail 40
+```
+
+| Check | Meaning |
+|-------|---------|
+| `LastTaskResult` **0** and State **Running** | Healthy |
+| `LastTaskResult` non-zero / port not listening | Node path, build, or permissions failed — read `autostart.log` |
+| nvm4w / `node` not found under SYSTEM | Reinstall with `-NodeExe "C:\nvm4w\nodejs\node.exe"` |
+
+Then reinstall the task (Administrator PowerShell for Startup):
+
+```powershell
+cd $HOME\LT-IDP
+git pull
+.\scripts\install-windows-autostart.ps1 -Uninstall
+.\scripts\install-windows-autostart.ps1 -NodeExe "C:\nvm4w\nodejs\node.exe" -Trigger Startup -StartNow
+```
 
 ### Option B — NSSM Windows service (optional)
 
@@ -372,5 +412,6 @@ Adjust `-LocalPort` if you changed `PORT`. For desktop-only Electron use on the 
 | Port 3001 already in use | `$env:PORT = "3002"` then restart, or stop the other process. |
 | Cannot reach UI from another PC | Check Windows Firewall (section 7) and that the server binds / you use the correct host IP. |
 | `npm.ps1` / “running scripts is disabled” | `Set-ExecutionPolicy -Scope Process Bypass`, or use `npm.cmd`, or run from **cmd.exe**. See [section 1.2](#12--nodejs-22-lts). |
+| Task `LT-IDP Web` is **Ready** but site down | `Ready` ≠ running. Run `.\scripts\install-windows-autostart.ps1 -Diagnose` and check `C:\ProgramData\LT-IDP\data\autostart.log`. Reinstall with `-NodeExe "C:\nvm4w\nodejs\node.exe"` if using nvm4w. |
 
 For Ubuntu/Linux steps, see [INSTALL-LINUX.md](INSTALL-LINUX.md). For a combined zero-to-running guide, see [INSTALLATION.md](INSTALLATION.md).
