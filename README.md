@@ -32,7 +32,7 @@ For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need
 - **[docs/INSTALL-LINUX.md](docs/INSTALL-LINUX.md)** — Ubuntu / Linux
 - **[docs/INSTALLATION.md](docs/INSTALLATION.md)** — Combined zero-to-running guide (Linux + Windows)
 
-**Windows auto-start (web):** `.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow` (Administrator PowerShell; requires `npm run build:web` first).
+**Windows deploy + auto-start (web):** Administrator PowerShell — `.\scripts\deploy-windows.ps1 -EnableAutostart -NodeExe "C:\nvm4w\nodejs\node.exe"`. Or build first, then `.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow`.
 
 ### Linux (Ubuntu): `better-sqlite3` / `node-gyp` errors
 

@@ -218,7 +218,16 @@ From an elevated or normal PowerShell session in a folder of your choice:
 ```powershell
 # Clone first if needed, then:
 cd $HOME\LT-IDP
+Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\deploy-windows.ps1
+```
+
+**New PC with auto-start at boot** (Administrator PowerShell — recommended):
+
+```powershell
+cd $HOME\LT-IDP
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\deploy-windows.ps1 -EnableAutostart -NodeExe "C:\nvm4w\nodejs\node.exe"
 ```
 
 Or with custom paths/port:
@@ -227,10 +236,20 @@ Or with custom paths/port:
 .\scripts\deploy-windows.ps1 `
   -InstallDir "C:\LT-IDP" `
   -DataDir "C:\ProgramData\LT-IDP\data" `
-  -Port 3001
+  -Port 3001 `
+  -EnableAutostart `
+  -NodeExe "C:\nvm4w\nodejs\node.exe"
 ```
 
-The script clones/updates the repo (if needed), runs `npm install`, `npm run build:web`, creates the data directory, and starts the web server. Prerequisites (Git, Node) must already be installed.
+| Switch | Effect |
+|--------|--------|
+| (default) | Clone/update, `npm install`, `build:web`, start server in this window |
+| `-EnableAutostart` | Same build, then register Task Scheduler and start via the task (boot as **SYSTEM** by default) |
+| `-AutostartTrigger Logon` | Auto-start only after user sign-in (no admin required) |
+| `-SkipStart` | Build only; do not start the server |
+| `-NodeExe "..."` | Absolute `node.exe` path (needed for reliable nvm4w auto-start) |
+
+`-EnableAutostart` with `-AutostartTrigger Startup` requires **Administrator** PowerShell. Prerequisites (Git, Node) must already be installed.
 
 ---
 
@@ -389,6 +408,7 @@ Adjust `-LocalPort` if you changed `PORT`. For desktop-only Electron use on the 
 | **Prod web** | `npm run build:web` then `npm run start:web` → http://localhost:3001 |
 | **Prod desktop installer** | `npm run build:app` → install from `release\` |
 | **Data dir (web)** | `$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"` |
+| **Deploy + auto-start (new PC)** | `.\scripts\deploy-windows.ps1 -EnableAutostart -NodeExe "C:\nvm4w\nodejs\node.exe"` |
 | **Auto-start (Task Scheduler)** | `.\scripts\install-windows-autostart.ps1 -Trigger Startup -StartNow` |
 | **Auto-start (NSSM service)** | `.\scripts\install-windows-service-nssm.ps1 -NssmPath "...\nssm.exe"` |
 | **Remove auto-start task** | `.\scripts\install-windows-autostart.ps1 -Uninstall` |
