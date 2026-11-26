@@ -184,3 +184,5 @@ For a **headless server without display**, Electron may need a virtual display (
 ---
 
 **Repository:** [https://github.com/haryowl/LT-IDP](https://github.com/haryowl/LT-IDP.git)
+
+For Windows, see [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md). For a combined guide, see [INSTALLATION.md](INSTALLATION.md).
