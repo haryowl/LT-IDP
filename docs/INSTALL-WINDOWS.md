@@ -1,0 +1,314 @@
+# Install and run LT-IDP on Windows (from GitHub)
+
+Use these steps to install **LT-IDP** on a **Windows** PC or server by cloning from GitHub.
+
+You can run LT-IDP as:
+
+| Mode | Best for | Result |
+|------|----------|--------|
+| **Desktop (Electron)** | Workstation with a GUI | Windows installer under `release/` (NSIS), or `npm run dev` |
+| **Web (browser)** | Always-on PC/server; remote access over HTTP | `npm run build:web` + `npm run start:web` on port **3001** |
+
+**Repository:** [https://github.com/haryowl/LT-IDP](https://github.com/haryowl/LT-IDP.git)
+
+**Supported Node.js:** **18, 20, or 22 (LTS).** Do **not** use Node **24+** (native modules such as `better-sqlite3` may not build). The repo includes [`.nvmrc`](../.nvmrc) with `22`.
+
+**Default login (change immediately):** username **`admin`**, password **`admin`** (created on first database initialization).
+
+---
+
+## Quick start (checklist)
+
+1. Install **Git for Windows** and **Node.js 22 LTS**.
+2. Clone the repo and run `npm install`.
+3. Choose a mode:
+   - **Desktop:** `npm run build:app` → install the NSIS setup from `release\`.
+   - **Web:** `npm run build:web` → `npm run start:web` → open http://localhost:3001.
+4. Log in as **admin** / **admin**, then change the password in **Settings**.
+
+For a scripted web deploy, see [scripts/deploy-windows.ps1](../scripts/deploy-windows.ps1) below.
+
+---
+
+## 1. Install prerequisites
+
+### 1.1 — Git for Windows
+
+1. Download: https://git-scm.com/download/win  
+2. Run the installer (defaults are fine for most setups).  
+3. Open a **new** **PowerShell** or **Git Bash** window after install.
+
+Verify:
+
+```powershell
+git --version
+```
+
+### 1.2 — Node.js 22 LTS
+
+1. Download the **LTS** Windows installer (**.msi**) for Node **22.x**: https://nodejs.org/  
+2. Run the installer. If offered, enable **“Automatically install necessary tools”** (helps with native modules).  
+3. Open a **new** PowerShell window and verify:
+
+```powershell
+node -v   # should show v22.x (or v20 / v18) — avoid v24+
+npm -v
+```
+
+**Optional:** use [nvm-windows](https://github.com/coreybutler/nvm-windows) to install and switch Node versions. Prefer **22** to match `.nvmrc`.
+
+### 1.3 — Visual Studio Build Tools (for native modules)
+
+Required if `npm install` or `npm run build:app` fails on **node-gyp**, **MSBuild**, **better-sqlite3**, or **serialport**.
+
+1. Download **Build Tools for Visual Studio**: https://visualstudio.microsoft.com/visual-cpp-build-tools/  
+2. In the installer, select **“Desktop development with C++”** (MSVC + Windows SDK).  
+3. Open a **new** terminal after install.
+
+**Optional (Python):** If builds still ask for Python, install **Python 3.12** from https://www.python.org/downloads/windows/ — check **“Add python.exe to PATH”** — then:
+
+```powershell
+npm config set python "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+```
+
+Adjust the path if your Python install location differs.
+
+---
+
+## 2. Clone the repository
+
+In **PowerShell**, choose a parent folder (example: your user profile), then:
+
+```powershell
+cd $HOME
+git clone https://github.com/haryowl/LT-IDP.git
+cd LT-IDP
+```
+
+Or use **Git Bash**:
+
+```bash
+cd ~
+git clone https://github.com/haryowl/LT-IDP.git
+cd LT-IDP
+```
+
+---
+
+## 3. Install dependencies
+
+From the repository root (`LT-IDP`):
+
+```powershell
+npm install
+```
+
+If native modules fail:
+
+1. Confirm Node is **not** 24+: `node -v`  
+2. Install **Visual Studio Build Tools** (section 1.3) if not already installed.  
+3. Clean and retry:
+
+```powershell
+Remove-Item -Recurse -Force node_modules
+# Optional: Remove-Item package-lock.json
+npm install
+```
+
+---
+
+## 4. Run the app
+
+### Option A — Desktop (Electron) — recommended on Windows workstations
+
+**Development (hot reload):**
+
+```powershell
+npm run dev
+```
+
+Electron opens a window. Vite serves the UI at http://localhost:3000. Stop with **Ctrl+C**.
+
+**Production installer (NSIS):**
+
+```powershell
+npm install
+npm run build:app
+```
+
+`build:app` runs `npm run build` first, then rebuilds native modules for Electron and packages with **electron-builder**.
+
+- Output folder: **`release\`**  
+- Install the generated **`.exe`** (NSIS setup) on this PC or copy it to other Windows machines.  
+- App data (SQLite DB, logs) lives under the OS user data directory, e.g. `%APPDATA%\IoT SCADA Client\` (product name from `package.json`).
+
+If `build:app` fails while compiling **better-sqlite3**, see [Troubleshooting](#troubleshooting).
+
+### Option B — Web application (browser)
+
+No Electron window. The Express server serves the UI and API.
+
+**Development:**
+
+```powershell
+npm run dev:web
+```
+
+Open **http://localhost:3000** in Chrome or Edge. API/WebSocket are proxied to port **3001** by Vite.
+
+**Production:**
+
+```powershell
+npm run build:web
+npm run start:web
+```
+
+Run **`build:web` before `start:web`**. Skipping the build causes:  
+`Cannot find module … dist-server\server\index.js`.
+
+- Default **PORT:** `3001`  
+- Default data directory: `.\data` under the current working directory  
+
+Example with an explicit data folder:
+
+```powershell
+$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"
+$env:PORT = "3001"
+New-Item -ItemType Directory -Force -Path $env:DATA_DIR
+npm run start:web
+```
+
+Open **http://localhost:3001** (or `http://<this-pc-ip>:3001` from another machine).
+
+**NODE_MODULE_VERSION mismatch** after a desktop build: native addons were rebuilt for Electron. Fix for web mode:
+
+```powershell
+npm run rebuild:native
+npm run start:web
+```
+
+You do **not** need `build:app` for web mode — only `npm install`, `build:web`, and `start:web`.
+
+---
+
+## 5. Quick deploy script (web mode)
+
+From an elevated or normal PowerShell session in a folder of your choice:
+
+```powershell
+# Clone first if needed, then:
+cd $HOME\LT-IDP
+.\scripts\deploy-windows.ps1
+```
+
+Or with custom paths/port:
+
+```powershell
+.\scripts\deploy-windows.ps1 `
+  -InstallDir "C:\LT-IDP" `
+  -DataDir "C:\ProgramData\LT-IDP\data" `
+  -Port 3001
+```
+
+The script clones/updates the repo (if needed), runs `npm install`, `npm run build:web`, creates the data directory, and starts the web server. Prerequisites (Git, Node) must already be installed.
+
+---
+
+## 6. Run in the background (optional)
+
+### Task Scheduler (simple)
+
+1. Open **Task Scheduler** → **Create Basic Task**.  
+2. Trigger: **When the computer starts** (or At log on).  
+3. Action: **Start a program**  
+   - Program: `C:\Program Files\nodejs\node.exe` (or output of `where.exe node`)  
+   - Arguments: `dist-server\server\index.js`  
+   - Start in: your LT-IDP install folder (must contain `dist\`, `dist-server\`, `node_modules\`)  
+4. In **Properties**, set environment if needed, or wrap with a small `.ps1` that sets `DATA_DIR` / `PORT` then starts Node.
+
+Example wrapper `start-lt-idp.ps1`:
+
+```powershell
+$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"
+$env:PORT = "3001"
+$env:NODE_ENV = "production"
+Set-Location "C:\Users\YOUR_USER\LT-IDP"
+node dist-server\server\index.js
+```
+
+### NSSM (Windows service)
+
+1. Download [NSSM](https://nssm.cc/download).  
+2. Install a service pointing at `node.exe` with arguments `dist-server\server\index.js` and AppDirectory set to the project root.  
+3. Set AppEnvironmentExtra for `PORT` and `DATA_DIR`.  
+4. Start the service from **services.msc**.
+
+### PM2 on Windows (optional)
+
+PM2 works on Windows but process management is less mature than on Linux. If you use it:
+
+```powershell
+npm install -g pm2
+npm run build:web
+# Edit ecosystem.config.cjs for PORT / DATA_DIR / cwd
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+---
+
+## 7. Windows Firewall (remote browser access)
+
+If other PCs should open the web UI, allow inbound TCP on your port (default **3001**):
+
+```powershell
+New-NetFirewallRule -DisplayName "LT-IDP Web" -Direction Inbound -Protocol TCP -LocalPort 3001 -Action Allow
+```
+
+Adjust `-LocalPort` if you changed `PORT`. For desktop-only Electron use on the same machine, this is usually unnecessary.
+
+---
+
+## 8. After installation
+
+1. Log in with **`admin` / `admin`** (first run).  
+2. Open **Settings** (as admin) and **change the admin password**; create other users as needed.  
+3. Configure **Modbus**, **MQTT**, **mappings**, and **publishers** from the UI.  
+4. For Modbus RTU on Windows, use the correct **COM** port (Device Manager → Ports). Close other apps (PuTTY, other Modbus tools) that may lock the port.  
+5. For disk space and historical retention, use **Historical Data → Storage and cleanup**.
+
+---
+
+## Quick reference
+
+| Item | Value |
+|------|--------|
+| **Repository (HTTPS)** | `https://github.com/haryowl/LT-IDP.git` |
+| **Clone** | `git clone https://github.com/haryowl/LT-IDP.git` then `cd LT-IDP` |
+| **Install deps** | `npm install` |
+| **Dev (desktop)** | `npm run dev` |
+| **Dev (web)** | `npm run dev:web` → http://localhost:3000 |
+| **Prod web** | `npm run build:web` then `npm run start:web` → http://localhost:3001 |
+| **Prod desktop installer** | `npm run build:app` → install from `release\` |
+| **Data dir (web)** | `$env:DATA_DIR = "C:\ProgramData\LT-IDP\data"` |
+| **Full cross-platform guide** | [INSTALLATION.md](INSTALLATION.md) |
+| **Linux guide** | [INSTALL-LINUX.md](INSTALL-LINUX.md) |
+
+---
+
+## Troubleshooting
+
+| Symptom | What to try |
+|---------|-------------|
+| Node version errors | Use Node **18–22**. Uninstall Node 24+ or switch with nvm-windows. |
+| `better-sqlite3` / `node-gyp` / MSBuild fails | Install **Visual Studio Build Tools** with **Desktop development with C++**. Open a new terminal, then `Remove-Item -Recurse -Force node_modules; npm install`. |
+| Python / distutils errors during native build | Install Python 3.12 with PATH, then `npm config set python "<path-to-python.exe>"`. |
+| `prebuild-install` **404** for `electron-v119` | Old lockfile / Electron 28 era. Delete `node_modules`, pull latest `main`, `npm install` again. |
+| `build:app` fails on `better-sqlite3` | Pull latest `main` (Electron **29.x** pinned), clean `node_modules`, `npm install`, `npm run build:app`. Or run `npx electron-builder install-app-deps`. |
+| `Cannot find module dist-server\server\index.js` | Run **`npm run build:web`** before **`npm run start:web`**. |
+| `NODE_MODULE_VERSION` mismatch on `start:web` | Run **`npm run rebuild:native`**, then **`start:web`**. Caused by Electron rebuild; web needs Node-native addons. |
+| COM port / Modbus “access denied” | Close GNSS/Settings if it uses the same port; quit PuTTY/Modbus tools; stop duplicate LT-IDP/Node processes; reconnect. |
+| Port 3001 already in use | `$env:PORT = "3002"` then restart, or stop the other process. |
+| Cannot reach UI from another PC | Check Windows Firewall (section 7) and that the server binds / you use the correct host IP. |
+
+For Ubuntu/Linux steps, see [INSTALL-LINUX.md](INSTALL-LINUX.md). For a combined zero-to-running guide, see [INSTALLATION.md](INSTALLATION.md).

@@ -25,7 +25,12 @@ If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm install` in the repo r
 npm install
 ```
 
-For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) or Visual Studio Build Tools. **Web mode** (`start:web`) uses Node-native addons; **`npm run build:app`** runs `rebuild:electron` for the installer. If `start:web` reports a NODE_MODULE_VERSION mismatch, run **`npm run rebuild:native`**. See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for full steps.
+For native modules (e.g. `better-sqlite3`, `serialport`) on Windows you may need [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) or Visual Studio Build Tools. **Web mode** (`start:web`) uses Node-native addons; **`npm run build:app`** runs `rebuild:electron` for the installer. If `start:web` reports a NODE_MODULE_VERSION mismatch, run **`npm run rebuild:native`**.
+
+**Install guides:**
+- **[docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md)** — Windows (desktop installer or web)
+- **[docs/INSTALL-LINUX.md](docs/INSTALL-LINUX.md)** — Ubuntu / Linux
+- **[docs/INSTALLATION.md](docs/INSTALLATION.md)** — Combined zero-to-running guide (Linux + Windows)
 
 ### Linux (Ubuntu): `better-sqlite3` / `node-gyp` errors
 

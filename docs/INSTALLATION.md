@@ -4,6 +4,11 @@ This document walks through a **new machine** setup for **Ubuntu Linux** and **W
 
 **https://github.com/haryowl/LT-IDP**
 
+Platform-focused guides (same repo):
+
+- **Windows:** [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) — also `scripts/deploy-windows.ps1`
+- **Linux Ubuntu:** [INSTALL-LINUX.md](INSTALL-LINUX.md) — also `scripts/deploy-linux.sh`
+
 For a quick overview of scripts and architecture, see the [README](../README.md) in the repository root.
 
 ---
@@ -199,6 +204,8 @@ Adjust the port if you changed `PORT`.
 ---
 
 ## Part B — Windows (step by step)
+
+> Prefer the dedicated guide: **[INSTALL-WINDOWS.md](INSTALL-WINDOWS.md)** (includes firewall, Task Scheduler / NSSM, and `deploy-windows.ps1`).
 
 ### B.1 — Install Git for Windows (to clone from GitHub)
 
