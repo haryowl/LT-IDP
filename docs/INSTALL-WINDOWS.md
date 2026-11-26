@@ -58,7 +58,24 @@ node -v   # should show v22.x (or v20 / v18) — avoid v24+
 npm -v
 ```
 
-**Optional:** use [nvm-windows](https://github.com/coreybutler/nvm-windows) to install and switch Node versions. Prefer **22** to match `.nvmrc`.
+**Optional:** use [nvm-windows](https://github.com/coreybutler/nvm-windows) / **nvm4w** to install and switch Node versions. Prefer **22** to match `.nvmrc`.
+
+#### PowerShell: “running scripts is disabled” / cannot load `npm.ps1`
+
+Windows may block `npm.ps1` (common with nvm4w). Fix for the **current** PowerShell window:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+```
+
+Then retry `npm install`, `npm run build:web`, etc.
+
+Alternatives:
+
+- Use the `.cmd` shim: `npm.cmd install`
+- Use **Command Prompt** (`cmd.exe`) instead of PowerShell
+- Or relax policy for your user (one-time):  
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ### 1.3 — Visual Studio Build Tools (for native modules)
 
@@ -354,5 +371,6 @@ Adjust `-LocalPort` if you changed `PORT`. For desktop-only Electron use on the 
 | COM port / Modbus “access denied” | Close GNSS/Settings if it uses the same port; quit PuTTY/Modbus tools; stop duplicate LT-IDP/Node processes; reconnect. |
 | Port 3001 already in use | `$env:PORT = "3002"` then restart, or stop the other process. |
 | Cannot reach UI from another PC | Check Windows Firewall (section 7) and that the server binds / you use the correct host IP. |
+| `npm.ps1` / “running scripts is disabled” | `Set-ExecutionPolicy -Scope Process Bypass`, or use `npm.cmd`, or run from **cmd.exe**. See [section 1.2](#12--nodejs-22-lts). |
 
 For Ubuntu/Linux steps, see [INSTALL-LINUX.md](INSTALL-LINUX.md). For a combined zero-to-running guide, see [INSTALLATION.md](INSTALLATION.md).
